@@ -1,68 +1,145 @@
-# ADMOSS Downloader
+<div align="center">
 
-A modern Android app that downloads videos and audio from **YouTube** and **TikTok** just by pasting a link.
+# 🚀 ADMOSS Downloader
 
-![Platform](https://img.shields.io/badge/platform-Android%2010%2B-3DDC84)
-![Language](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF)
-![Engine](https://img.shields.io/badge/engine-yt--dlp%20%2B%20ffmpeg-00E5FF)
+### ⚡ Download YouTube & TikTok videos in seconds, just paste a link
 
-## Features
+![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)
+![yt-dlp](https://img.shields.io/badge/Engine-yt--dlp%20%2B%20ffmpeg-00E5FF?style=for-the-badge)
+![Build](https://img.shields.io/badge/Build-GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
 
-- Download from YouTube, TikTok, and many other sites supported by yt-dlp
-- Video quality choice: Best, 1080p, 720p, 480p, 360p
-- Audio-only mode (MP3)
-- Live download progress with percentage, time left, and a Cancel button
-- Dark, modern UI built with Jetpack Compose
-- Paste button, automatic site detection, and **Share to ADMOSS Downloader** support from other apps
-- Saves to your gallery: videos in `Movies/ADMOSS`, audio in `Music/ADMOSS`
-- Recent downloads list, tap to play
-- yt-dlp updates itself when you are online
+[**⬇️ Download the APK**](../../releases/latest) · [**🐞 Report a bug**](../../issues)
 
-## Download the APK
+</div>
 
-Go to the **Actions** tab, open the latest successful run, and download **ADMOSS-Downloader-APK** from the Artifacts section. Unzip it and install `app-debug.apk` on your phone (allow "Install unknown apps" when asked).
+---
 
-## Build it yourself
+## 📖 About
+
+**ADMOSS Downloader** is a modern Android app that saves videos and audio from **YouTube**, **TikTok** and many other sites. Paste a link, pick a quality, and tap download. Everything is saved straight to your gallery.
+
+---
+
+## ✨ Features
+
+| | Feature |
+|---|---|
+| 🎬 | Download from **YouTube**, **TikTok** and many more sites |
+| 🎚️ | Quality choice: **Best · 1080p · 720p · 480p · 360p** |
+| 🎵 | **Audio-only** mode (MP3) |
+| 📊 | Live progress with percentage, time left and a **Cancel** button |
+| 🌙 | Sleek **dark UI** built with Jetpack Compose |
+| 📋 | One-tap **Paste**, automatic site detection |
+| 🔗 | **Share to ADMOSS Downloader** from the YouTube and TikTok apps |
+| 📁 | Saves to `Movies/ADMOSS` and `Music/ADMOSS` |
+| 🕘 | **Recent downloads** list, tap to play |
+| 🔄 | yt-dlp updates itself when you are online |
+
+---
+
+## 📲 Install
+
+1. Go to the [**Releases**](../../releases/latest) page
+2. Download **`ADMOSS-Downloader.apk`**
+3. Open it on your phone and allow **"Install unknown apps"** if asked
+4. Open the app, paste a link, and tap **DOWNLOAD**
+
+**Requirements:** Android 10 or newer, about 100 MB of free space, and an internet connection.
+
+---
+
+## 🧑‍💻 How to use
+
+1. 📋 Copy a YouTube or TikTok link
+2. 📱 Open ADMOSS Downloader and tap the **paste** icon (or use **Share** inside YouTube/TikTok)
+3. 🎛️ Choose **Video** or **Audio MP3**, then a quality
+4. ⬇️ Tap **DOWNLOAD** and keep the app open until it finishes
+5. 🎉 Find your file in the gallery or in the **Recent downloads** list
+
+---
+
+## 🛠️ Build it yourself
 
 ### Without Android Studio (GitHub Actions)
-1. Fork or upload this project to your own GitHub repository.
-2. Open the **Actions** tab. The **Build APK** workflow runs on every push (or start it with **Run workflow**).
-3. When it finishes, download the APK from Artifacts.
+
+1. Fork this repo, or upload the project to your own repository
+2. Open the **Actions** tab. The **Build APK** workflow runs on every push (or start it with **Run workflow**)
+3. When it turns green, open the run and download **ADMOSS-Downloader-APK** from **Artifacts**
 
 ### With Android Studio
-1. Open the project folder in Android Studio.
-2. Let Gradle sync, then press **Run**.
 
-## Requirements
+1. Open the project folder in Android Studio
+2. Wait for Gradle to sync
+3. Press **Run**
 
-- Android 10 (API 29) or newer
-- Internet connection
-- About 100 MB of free space for the app
+### Publish a release automatically
 
-## How to use
+Push a version tag and the workflow attaches the APK to a new release:
 
-1. Copy a YouTube or TikTok link.
-2. Open ADMOSS Downloader and tap the paste icon (or use Share from the YouTube/TikTok app).
-3. Choose Video or Audio MP3, and a quality.
-4. Tap **DOWNLOAD** and keep the app open until it finishes.
+```bash
+git tag v1.0
+git push origin v1.0
+```
 
-## Tech stack
+---
 
-- Kotlin and Jetpack Compose (Material 3)
-- [youtubedl-android](https://github.com/JunkFood02/youtubedl-android) (yt-dlp and ffmpeg for Android)
-- MediaStore for saving files
-- GitHub Actions for building the APK
+## 🧱 Tech stack
 
-## Known limitations
+- **Kotlin** and **Jetpack Compose** (Material 3)
+- [**youtubedl-android**](https://github.com/JunkFood02/youtubedl-android) (yt-dlp and ffmpeg for Android)
+- **MediaStore** for saving files to the gallery
+- **GitHub Actions** for building the APK
 
-- Downloads stop if the app is closed (no background service yet)
-- YouTube sometimes shows a verification check, which can block a download. Try again later or try another video
-- The debug APK is large because it bundles Python and ffmpeg
+---
 
-## Disclaimer
+## 📂 Project structure
 
-This project is for personal and educational use. Only download content you have the right to save, respect the creators, and follow the terms of service of the sites you use. Do not re-upload other people's videos as your own.
+```
+ADMOSS-Downloader/
+├── .github/workflows/build.yml      # builds the APK in the cloud
+├── app/
+│   ├── build.gradle.kts
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── java/com/admoss/downloader/
+│       │   ├── MainActivity.kt      # Compose UI
+│       │   └── DownloadViewModel.kt # download engine, progress, saving
+│       └── res/                     # theme, colors, app icon
+├── build.gradle.kts
+├── settings.gradle.kts
+└── gradle.properties
+```
 
-## License
+---
 
-MIT License. Add a `LICENSE` file to your repo if you want to publish it under this license.
+## ⚠️ Known limitations
+
+- Keep the app **open** while downloading (no background service yet)
+- YouTube may sometimes show a verification check and block a download. Try again later or try another video
+- The APK is large (around 100 MB) because it bundles Python and ffmpeg
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Background downloads with a notification
+- [ ] Playlist support
+- [ ] Light theme
+- [ ] Download history search
+
+---
+
+## 📜 Disclaimer
+
+This project is for **personal and educational use** only. Download only content you have the right to save, respect the creators, and follow the terms of service of the sites you use. Do not re-upload other people's videos as your own.
+
+---
+
+<div align="center">
+
+**Made with ❤️ by ADMOSS**
+
+⭐ If you like the project, give it a star!
+
+</div>
