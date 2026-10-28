@@ -12,13 +12,29 @@ android {
         applicationId = "com.admoss.downloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // One small APK per CPU type instead of one big universal APK.
+    // Most phones need the arm64-v8a one.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
     }
 
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the debug key so the APK can be installed directly
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     compileOptions {
@@ -29,8 +45,16 @@ android {
 
     buildFeatures { compose = true }
 
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     // Needed so the bundled Python / ffmpeg binaries can run
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+        resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/DEPENDENCIES", "/META-INF/LICENSE*", "/META-INF/NOTICE*")
+    }
 }
 
 dependencies {

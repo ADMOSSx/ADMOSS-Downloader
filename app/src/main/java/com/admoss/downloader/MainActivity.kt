@@ -1,18 +1,24 @@
 package com.admoss.downloader
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +30,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,20 +76,23 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import java.util.Locale
 
 private val Cyan = Color(0xFF00E5FF)
 private val Violet = Color(0xFF7C4DFF)
 private val Pink = Color(0xFFFF4081)
 private val Green = Color(0xFF00E676)
 private val Red = Color(0xFFFF5252)
+private val Orange = Color(0xFFFFAB40)
 
 class MainActivity : ComponentActivity() {
 
@@ -125,10 +136,56 @@ fun AdmossTheme(content: @Composable () -> Unit) {
     )
 }
 
+// ---------- helpers ----------
+
+private fun formatSize(bytes: Long): String = when {
+    bytes <= 0L -> "Size unknown"
+    bytes >= (1L shl 30) -> String.format(Locale.US, "%.2f GB", bytes / 1073741824.0)
+    else -> String.format(Locale.US, "%.1f MB", bytes / 1048576.0)
+}
+
+private fun formatDuration(sec: Long): String {
+    val h = sec / 3600
+    val m = (sec % 3600) / 60
+    val s = sec % 60
+    return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+    else String.format(Locale.US, "%d:%02d", m, s)
+}
+
+private fun formatEta(seconds: Long): String {
+    val m = seconds / 60
+    val s = seconds % 60
+    return if (m > 0) "${m}m ${s}s" else "${s}s"
+}
+
+private fun platformOf(url: String): String? {
+    val u = url.lowercase()
+    return when {
+        "youtu" in u -> "YouTube"
+        "tiktok" in u -> "TikTok"
+        u.startsWith("http") -> "Other site"
+        else -> null
+    }
+}
+
+// ---------- screen ----------
+
 @Composable
 fun AdmossScreen(vm: DownloadViewModel) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+
+    // Ask for notification permission once (needed to see download progress in the notification bar)
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val bg = Brush.verticalGradient(
         listOf(Color(0xFF0B0F1A), Color(0xFF16102E), Color(0xFF0B0F1A))
     )
@@ -151,22 +208,26 @@ fun AdmossScreen(vm: DownloadViewModel) {
             })
         }
 
+        item {
+            AnimatedVisibility(visible = vm.infoLoading || vm.info != null) { InfoCard(vm) }
+        }
+
         item { OptionsCard(vm) }
 
         item { DownloadButton(vm) }
 
         item {
-            AnimatedVisibility(visible = vm.downloading) { ProgressCard(vm) }
+            AnimatedVisibility(visible = DownloadCenter.downloading) { ProgressCard() }
         }
 
-        vm.error?.let { msg ->
+        DownloadCenter.error?.let { msg ->
             item { MessageCard(msg, isError = true) }
         }
-        vm.success?.let { msg ->
+        DownloadCenter.success?.let { msg ->
             item { MessageCard(msg, isError = false) }
         }
 
-        if (vm.history.isNotEmpty()) {
+        if (DownloadCenter.history.isNotEmpty()) {
             item {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -179,12 +240,12 @@ fun AdmossScreen(vm: DownloadViewModel) {
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
-                    TextButton(onClick = { vm.clearHistory() }) {
+                    TextButton(onClick = { DownloadCenter.clearHistory(context) }) {
                         Text("Clear", color = Color.White.copy(alpha = 0.6f))
                     }
                 }
             }
-            items(vm.history, key = { it.uri }) { item ->
+            items(DownloadCenter.history, key = { it.uri }) { item ->
                 HistoryRow(item) { openItem(context, item) }
             }
         }
@@ -193,7 +254,7 @@ fun AdmossScreen(vm: DownloadViewModel) {
     }
 }
 
-// ---------- Pieces ----------
+// ---------- pieces ----------
 
 @Composable
 private fun Header() {
@@ -244,13 +305,15 @@ private fun GlassCard(modifier: Modifier = Modifier, content: @Composable Column
     )
 }
 
-private fun platformOf(url: String): String? {
-    val u = url.lowercase()
-    return when {
-        "youtu" in u -> "YouTube"
-        "tiktok" in u -> "TikTok"
-        u.startsWith("http") -> "Other site"
-        else -> null
+@Composable
+private fun Pill(text: String, color: Color) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(color.copy(alpha = 0.18f))
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+    ) {
+        Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -266,14 +329,10 @@ private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
         Spacer(Modifier.height(10.dp))
         OutlinedTextField(
             value = vm.link,
-            onValueChange = {
-                vm.link = it
-                vm.error = null
-                vm.success = null
-            },
+            onValueChange = { vm.onLinkChange(it) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            enabled = !vm.downloading,
+            enabled = !DownloadCenter.downloading,
             placeholder = { Text("youtube.com/…  or  tiktok.com/…") },
             leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null) },
             trailingIcon = {
@@ -282,7 +341,7 @@ private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
                         Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste")
                     }
                 } else {
-                    IconButton(onClick = { vm.link = "" }) {
+                    IconButton(onClick = { vm.onLinkChange("") }) {
                         Icon(Icons.Rounded.Close, contentDescription = "Clear")
                     }
                 }
@@ -302,18 +361,98 @@ private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
                 "TikTok" -> Cyan
                 else -> Violet
             }
+            Pill("Detected: $platform", color)
+        }
+
+        if (vm.infoError) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Couldn't load the video info. You can still try to download.",
+                color = Orange,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun InfoCard(vm: DownloadViewModel) {
+    GlassCard {
+        val info = vm.info
+        if (info == null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = Cyan
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "Getting video info…",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 14.sp
+                )
+            }
+        } else {
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(color.copy(alpha = 0.18f))
-                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.06f))
             ) {
+                vm.thumb?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                if (info.durationSec > 0) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black.copy(alpha = 0.7f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            formatDuration(info.durationSec),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                info.title,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (info.uploader.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    "Detected: $platform",
-                    color = color,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
+                    info.uploader,
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            val bytes = if (vm.audioOnly) info.audioSize else (info.sizes[vm.quality] ?: 0L)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill(if (bytes > 0) "≈ ${formatSize(bytes)}" else "Size unknown", Cyan)
+                Pill(if (vm.audioOnly) "MP3 192 kbps" else vm.quality.label, Violet)
             }
         }
     }
@@ -354,15 +493,20 @@ private fun OptionsCard(vm: DownloadViewModel) {
                     fontSize = 13.sp
                 )
                 Spacer(Modifier.height(6.dp))
+                val available = vm.info?.sizes?.keys?.toList()?.takeIf { it.isNotEmpty() }
+                    ?: Quality.values().toList()
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Quality.values().forEach { q ->
+                    available.forEach { q ->
+                        val size = vm.info?.sizes?.get(q) ?: 0L
                         FilterChip(
                             selected = vm.quality == q,
                             onClick = { vm.quality = q },
-                            label = { Text(q.label) },
+                            label = {
+                                Text(if (size > 0) "${q.label} · ${formatSize(size)}" else q.label)
+                            },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = Cyan.copy(alpha = 0.25f),
                                 selectedLabelColor = Cyan
@@ -416,7 +560,7 @@ private fun FormatTab(
 @Composable
 private fun DownloadButton(vm: DownloadViewModel) {
     val focus = LocalFocusManager.current
-    val enabled = vm.engineReady && !vm.downloading && vm.link.isNotBlank()
+    val enabled = Engine.ready && !DownloadCenter.downloading && vm.link.isNotBlank()
     val gray = Color(0xFF2A3045)
 
     Box(
@@ -435,16 +579,16 @@ private fun DownloadButton(vm: DownloadViewModel) {
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (!vm.engineReady && !vm.engineFailed) {
+            if (Engine.failed) {
+                Text(Engine.message, color = Color.White, fontWeight = FontWeight.SemiBold)
+            } else if (!Engine.ready) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                     color = Color.White
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(vm.engineMessage, color = Color.White, fontWeight = FontWeight.SemiBold)
-            } else if (vm.engineFailed) {
-                Text(vm.engineMessage, color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(Engine.message, color = Color.White, fontWeight = FontWeight.SemiBold)
             } else {
                 Icon(Icons.Rounded.Download, contentDescription = null, tint = Color.White)
                 Spacer(Modifier.width(8.dp))
@@ -460,24 +604,28 @@ private fun DownloadButton(vm: DownloadViewModel) {
     }
 }
 
-private fun formatEta(seconds: Long): String {
-    val m = seconds / 60
-    val s = seconds % 60
-    return if (m > 0) "${m}m ${s}s" else "${s}s"
-}
-
 @Composable
-private fun ProgressCard(vm: DownloadViewModel) {
+private fun ProgressCard() {
     val animated by animateFloatAsState(
-        targetValue = vm.progress,
+        targetValue = DownloadCenter.progress,
         animationSpec = tween(300),
         label = "progress"
     )
 
     GlassCard {
+        if (DownloadCenter.title.isNotBlank()) {
+            Text(
+                DownloadCenter.title,
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(10.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
-                if (vm.progress <= 0f) {
+                if (DownloadCenter.progress <= 0f) {
                     CircularProgressIndicator(
                         modifier = Modifier.fillMaxSize(),
                         color = Cyan,
@@ -493,7 +641,7 @@ private fun ProgressCard(vm: DownloadViewModel) {
                     )
                 }
                 Text(
-                    if (vm.progress <= 0f) "…" else "${(animated * 100).toInt()}%",
+                    if (DownloadCenter.progress <= 0f) "…" else "${(animated * 100).toInt()}%",
                     color = Color.White,
                     fontWeight = FontWeight.Black,
                     fontSize = 22.sp
@@ -502,17 +650,18 @@ private fun ProgressCard(vm: DownloadViewModel) {
             Spacer(Modifier.width(18.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    vm.stage,
+                    DownloadCenter.stage,
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp
                 )
                 Text(
-                    if (vm.eta > 0) "About ${formatEta(vm.eta)} left" else "Please keep the app open",
+                    if (DownloadCenter.eta > 0) "About ${formatEta(DownloadCenter.eta)} left"
+                    else "Runs in the background",
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = 13.sp
                 )
-                TextButton(onClick = { vm.cancel() }) {
+                TextButton(onClick = { DownloadCenter.cancel() }) {
                     Text("Cancel", color = Pink, fontWeight = FontWeight.Bold)
                 }
             }
@@ -567,7 +716,9 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit) {
             Modifier
                 .size(42.dp)
                 .clip(CircleShape)
-                .background(Brush.linearGradient(listOf(Cyan.copy(alpha = 0.7f), Violet.copy(alpha = 0.7f)))),
+                .background(
+                    Brush.linearGradient(listOf(Cyan.copy(alpha = 0.7f), Violet.copy(alpha = 0.7f)))
+                ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
