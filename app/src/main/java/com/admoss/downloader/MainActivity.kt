@@ -42,6 +42,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -54,6 +56,7 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Videocam
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -70,6 +73,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +85,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,7 +113,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
-            AdmossTheme { AdmossScreen(vm) }
+            AdmossTheme {
+                val crash = remember { CrashReport.read(this@MainActivity) }
+                var showCrash by remember { mutableStateOf(crash != null) }
+                if (crash != null && showCrash) {
+                    CrashScreen(crash) {
+                        CrashReport.clear(this@MainActivity)
+                        showCrash = false
+                    }
+                } else {
+                    AdmossScreen(vm)
+                }
+            }
         }
     }
 
@@ -753,5 +771,54 @@ private fun openItem(context: Context, item: HistoryItem) {
         context.startActivity(i)
     } catch (e: Exception) {
         Toast.makeText(context, "Can't open this file", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun CrashScreen(report: String, onContinue: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B0F1A))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(20.dp)
+    ) {
+        Text(
+            "ADMOSS crashed last time",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Tap Copy and send this text to Claude so it can be fixed.",
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 14.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White.copy(alpha = 0.06f))
+                .padding(12.dp)
+        ) {
+            SelectionContainer {
+                Text(
+                    report,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Copy") }
+            TextButton(onClick = onContinue) { Text("Continue", color = Cyan) }
+        }
     }
 }

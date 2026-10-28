@@ -28,7 +28,7 @@ object Engine {
                 YoutubeDL.getInstance().init(app)
                 FFmpeg.getInstance().init(app)
                 ready = true
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 failed = true
                 message = "Engine failed to start"
                 failure = e.message
@@ -37,7 +37,7 @@ object Engine {
             // Keep yt-dlp fresh: YouTube changes often. Silent if offline.
             try {
                 YoutubeDL.getInstance().updateYoutubeDL(app)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 // ignore
             }
         }

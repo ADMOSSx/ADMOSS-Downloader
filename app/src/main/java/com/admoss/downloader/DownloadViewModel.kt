@@ -104,7 +104,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 if (!parsed.sizes.containsKey(quality)) quality = Quality.BEST
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (seq == infoSeq) infoError = true
             } finally {
                 if (seq == infoSeq) infoLoading = false

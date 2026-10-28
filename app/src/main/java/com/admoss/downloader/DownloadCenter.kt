@@ -162,7 +162,7 @@ object DownloadCenter {
             saveHistory(ctx)
             success = if (audio) "Saved to Music/ADMOSS" else "Saved to Movies/ADMOSS"
             result = item
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (!cancelled) error = cleanError(e)
         } finally {
             tmp.deleteRecursively()
@@ -174,7 +174,7 @@ object DownloadCenter {
 
     // ---- helpers ----
 
-    private fun cleanError(e: Exception): String {
+    private fun cleanError(e: Throwable): String {
         val raw = e.message ?: "Unknown error"
         val line = raw.lines().lastOrNull { it.contains("ERROR") }
             ?: raw.lines().lastOrNull { it.isNotBlank() }
