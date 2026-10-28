@@ -19,16 +19,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-/** Runs a download as a foreground service so it keeps going when you leave the app. */
+/** Works through the download queue as a foreground service, so it keeps going when you leave the app. */
 class DownloadService : Service() {
 
     companion object {
         const val ACTION_START = "com.admoss.downloader.START"
-        const val ACTION_CANCEL = "com.admoss.downloader.CANCEL"
-        const val EXTRA_URL = "url"
-        const val EXTRA_AUDIO = "audio"
-        const val EXTRA_HEIGHT = "height"
-        const val EXTRA_TITLE = "title"
+        const val ACTION_CANCEL_ALL = "com.admoss.downloader.CANCEL_ALL"
 
         private const val CHANNEL_PROGRESS = "admoss_progress"
         private const val CHANNEL_DONE = "admoss_done"
@@ -39,6 +35,9 @@ class DownloadService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    @Volatile
+    private var lastStartId = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,51 +53,22 @@ class DownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_CANCEL) {
-            DownloadCenter.cancel()
+        lastStartId = startId
+
+        if (intent?.action == ACTION_CANCEL_ALL) {
+            DownloadCenter.cancelAll()
+            if (job?.isActive != true) stopSelf()
             return START_NOT_STICKY
         }
-
-        val i = intent ?: run {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        val title = i.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Video" }
 
         // Must be called quickly after startForegroundService()
+        val first = DownloadCenter.nextWaiting()
         startForeground(
             NOTIF_PROGRESS,
-            buildProgress(title, 0, "Starting…"),
+            buildProgress(first?.title ?: "ADMOSS Downloader", "", 0, "Starting…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         )
-
-        val url = i.getStringExtra(EXTRA_URL)
-        if (url == null) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        if (job?.isActive == true) return START_NOT_STICKY
-
-        val audio = i.getBooleanExtra(EXTRA_AUDIO, false)
-        val height = i.getIntExtra(EXTRA_HEIGHT, -1).takeIf { it > 0 }
-
-        acquireWakeLock()
-        job = scope.launch {
-            var item: HistoryItem? = null
-            try {
-                item = DownloadCenter.run(applicationContext, url, audio, height) { pct, stage ->
-                    getSystemService(NotificationManager::class.java)
-                        .notify(NOTIF_PROGRESS, buildProgress(title, pct, stage))
-                }
-            } finally {
-                releaseWakeLock()
-            }
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            showResult(item)
-            stopSelf()
-        }
+        launchWorker()
         return START_NOT_STICKY
     }
 
@@ -108,65 +78,125 @@ class DownloadService : Service() {
         super.onDestroy()
     }
 
+    // ---- worker ----
+
+    private fun launchWorker() {
+        if (job?.isActive == true) return
+        acquireWakeLock()
+
+        job = scope.launch {
+            var processed = 0
+            var done = 0
+            var failed = 0
+            var lastDone: HistoryItem? = null
+            var lastError: String? = null
+            val nm = getSystemService(NotificationManager::class.java)
+
+            try {
+                while (true) {
+                    // Work through everything that is waiting
+                    while (true) {
+                        val item = DownloadCenter.nextWaiting() ?: break
+                        val waitingAfter = DownloadCenter.queue.count { it.status == Status.WAITING } - 1
+                        val total = processed + 1 + waitingAfter
+                        val label = if (total > 1) "${processed + 1} of $total" else ""
+
+                        nm.notify(NOTIF_PROGRESS, buildProgress(item.title, label, 0, "Starting…"))
+                        val saved = DownloadCenter.runItem(applicationContext, item) { pct, stage ->
+                            nm.notify(NOTIF_PROGRESS, buildProgress(item.title, label, pct, stage))
+                        }
+                        processed++
+                        when (item.status) {
+                            Status.DONE -> {
+                                done++
+                                lastDone = saved
+                            }
+                            Status.FAILED -> {
+                                failed++
+                                lastError = item.error
+                            }
+                            else -> {}
+                        }
+                    }
+
+                    // Nothing left. Stop, unless a new request arrived in the meantime.
+                    val sid = lastStartId
+                    if (DownloadCenter.hasWaiting()) continue
+                    showSummary(done, failed, lastDone, lastError)
+                    done = 0
+                    failed = 0
+                    lastDone = null
+                    lastError = null
+                    if (stopSelfResult(sid)) break
+                }
+            } finally {
+                releaseWakeLock()
+            }
+        }
+    }
+
     // ---- notifications ----
 
-    private fun buildProgress(title: String, pct: Int, stage: String): Notification {
-        val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val cancel = PendingIntent.getService(
+    private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
+        this, 0,
+        Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    private fun buildProgress(title: String, label: String, pct: Int, stage: String): Notification {
+        val cancelAll = PendingIntent.getService(
             this, 1,
-            Intent(this, DownloadService::class.java).setAction(ACTION_CANCEL),
+            Intent(this, DownloadService::class.java).setAction(ACTION_CANCEL_ALL),
             PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(this, CHANNEL_PROGRESS)
+        val builder = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(title)
             .setContentText(if (pct > 0) "$stage  $pct%" else stage)
             .setProgress(100, pct, pct <= 0)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setContentIntent(open)
-            .addAction(0, "Cancel", cancel)
-            .build()
+            .setContentIntent(openAppIntent())
+            .addAction(0, "Cancel all", cancelAll)
+        if (label.isNotBlank()) builder.setSubText(label)
+        return builder.build()
     }
 
-    private fun showResult(item: HistoryItem?) {
+    private fun showSummary(done: Int, failed: Int, last: HistoryItem?, lastError: String?) {
+        if (done == 0 && failed == 0) return
         val nm = getSystemService(NotificationManager::class.java)
-        if (item != null) {
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_DONE)
+            .setAutoCancel(true)
+
+        if (done == 1 && failed == 0 && last != null) {
             val view = Intent(Intent.ACTION_VIEW)
-                .setDataAndType(Uri.parse(item.uri), if (item.audio) "audio/*" else "video/*")
+                .setDataAndType(Uri.parse(last.uri), if (last.audio) "audio/*" else "video/*")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             val pi = PendingIntent.getActivity(
                 this, 2, view,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
-            nm.notify(
-                NOTIF_DONE,
-                NotificationCompat.Builder(this, CHANNEL_DONE)
-                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                    .setContentTitle("Download complete")
-                    .setContentText(item.title)
-                    .setContentIntent(pi)
-                    .setAutoCancel(true)
-                    .build()
-            )
+            builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle("Download complete")
+                .setContentText(last.title)
+                .setContentIntent(pi)
+        } else if (done == 0 && failed == 1) {
+            val err = lastError ?: "Something went wrong"
+            builder.setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle("Download failed")
+                .setContentText(err)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(err))
+                .setContentIntent(openAppIntent())
         } else {
-            val err = DownloadCenter.error ?: return
-            nm.notify(
-                NOTIF_DONE,
-                NotificationCompat.Builder(this, CHANNEL_DONE)
-                    .setSmallIcon(android.R.drawable.stat_notify_error)
-                    .setContentTitle("Download failed")
-                    .setContentText(err)
-                    .setStyle(NotificationCompat.BigTextStyle().bigText(err))
-                    .setAutoCancel(true)
-                    .build()
-            )
+            val text = if (failed > 0) "$done finished, $failed failed" else "$done downloads finished"
+            builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle("Downloads finished")
+                .setContentText(text)
+                .setContentIntent(openAppIntent())
         }
+        nm.notify(NOTIF_DONE, builder.build())
     }
 
     // ---- wake lock ----
@@ -174,7 +204,7 @@ class DownloadService : Service() {
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "admoss:download").apply {
-            acquire(60 * 60 * 1000L)
+            acquire(3 * 60 * 60 * 1000L)
         }
     }
 

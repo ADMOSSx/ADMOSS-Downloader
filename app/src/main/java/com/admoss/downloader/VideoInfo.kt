@@ -122,3 +122,46 @@ object InfoParser {
         return v.size + extra
     }
 }
+
+// ---------- Playlists ----------
+
+data class PlaylistEntry(val url: String, val title: String, val durationSec: Long)
+
+data class PlaylistInfo(val title: String, val uploader: String, val entries: List<PlaylistEntry>)
+
+/** Reads the JSON printed by `yt-dlp --flat-playlist --dump-single-json`. */
+object PlaylistParser {
+
+    private fun clean(s: String?): String = if (s == null || s == "null") "" else s
+
+    fun parse(raw: String): PlaylistInfo {
+        val start = raw.indexOf('{')
+        if (start < 0) throw Exception("No info returned")
+        val o = JSONObject(raw.substring(start))
+        val arr = o.optJSONArray("entries") ?: throw Exception("No videos found in this link")
+
+        val list = ArrayList<PlaylistEntry>()
+        for (i in 0 until minOf(arr.length(), 200)) {
+            val e = arr.optJSONObject(i) ?: continue
+            val id = clean(e.optString("id", ""))
+            var url = clean(e.optString("url", ""))
+            if (url.isBlank()) url = clean(e.optString("webpage_url", ""))
+            if (url.isBlank() && id.isNotBlank()) url = "https://www.youtube.com/watch?v=$id"
+            if (url.isBlank()) continue
+            if (!url.startsWith("http")) url = "https://www.youtube.com/watch?v=$url"
+
+            val title = clean(e.optString("title", "")).ifBlank { "Video ${i + 1}" }
+            if (title == "[Private video]" || title == "[Deleted video]") continue
+
+            val dur = e.optDouble("duration", 0.0).let { if (it.isNaN()) 0L else it.toLong() }
+            list.add(PlaylistEntry(url, title, dur))
+        }
+        if (list.isEmpty()) throw Exception("No videos found in this link")
+
+        return PlaylistInfo(
+            title = clean(o.optString("title", "")).ifBlank { "Playlist" },
+            uploader = clean(o.optString("uploader", "")).ifBlank { clean(o.optString("channel", "")) },
+            entries = list
+        )
+    }
+}

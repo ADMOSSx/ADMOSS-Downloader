@@ -30,8 +30,11 @@
 | 🎚️ | Quality choice with the size of each option: **Best · 1080p · 720p · 480p · 360p** |
 | 🎵 | **Audio-only** mode (MP3) |
 | 📊 | Live progress with percentage, time left and a **Cancel** button |
+| 📚 | **Download queue**: add many links, they download one after another, cancel any of them |
+| 📃 | **Playlist support**: load a whole YouTube playlist, pick the videos you want |
 | 🔔 | **Background downloads** with a notification (progress, cancel, tap to open) |
-| 🌙 | Sleek **dark UI** built with Jetpack Compose |
+| 🌗 | Modern UI with **dark and light themes** (switch with the sun/moon button) |
+| 🔎 | **Library tab** with search for your finished downloads |
 | 📋 | One-tap **Paste**, automatic site detection |
 | 🔗 | **Share to ADMOSS Downloader** from the YouTube and TikTok apps |
 | 📁 | Saves to `Movies/ADMOSS` and `Music/ADMOSS` |
@@ -111,7 +114,7 @@ ADMOSS-Downloader/
 │       │   ├── DownloadCenter.kt    # download logic, progress, saving
 │       │   ├── VideoInfo.kt         # title / size estimates
 │       │   └── Engine.kt            # yt-dlp + ffmpeg startup
-│       └── res/                     # theme, colors, app icon
+│       └── res/                     # theme, colors, app icon, vector icons
 ├── build.gradle.kts
 ├── settings.gradle.kts
 └── gradle.properties
@@ -121,7 +124,8 @@ ADMOSS-Downloader/
 
 ## ⚠️ Known limitations
 
-- Only one download at a time (no queue yet)
+- Playlists load up to 200 videos at a time
+- Downloads run one after another (not in parallel)
 - YouTube may sometimes show a verification check and block a download. Try again later or try another video
 - The APK is still fairly big because it bundles Python and ffmpeg. Install the **arm64-v8a** APK on most phones (it is the smaller one); use **armeabi-v7a** only on very old phones
 
@@ -131,10 +135,10 @@ ADMOSS-Downloader/
 
 - [x] Background downloads with a notification
 - [x] Video info and size before downloading
-- [ ] Download queue
-- [ ] Playlist support
-- [ ] Light theme
-- [ ] Download history search
+- [x] Download queue
+- [x] Playlist support
+- [x] Light theme
+- [x] Library search
 
 ---
 

@@ -29,12 +29,18 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var audioOnly by mutableStateOf(false)
     var quality by mutableStateOf(Quality.BEST)
+    var message by mutableStateOf<String?>(null)
 
-    // ---- video info shown before downloading ----
+    // ---- single video info ----
     var info by mutableStateOf<VideoInfoUi?>(null)
     var thumb by mutableStateOf<ImageBitmap?>(null)
     var infoLoading by mutableStateOf(false)
     var infoError by mutableStateOf(false)
+
+    // ---- playlist ----
+    var playlist by mutableStateOf<PlaylistInfo?>(null)
+    var selectedUrls by mutableStateOf<Set<String>>(emptySet())
+    var playlistHint by mutableStateOf(false) // single video link that also belongs to a playlist
 
     private var infoSeq = 0
     private var infoPid: String? = null
@@ -51,25 +57,39 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onLinkChange(text: String) {
         link = text
-        DownloadCenter.error = null
-        if (!DownloadCenter.downloading) DownloadCenter.success = null
+        message = null
         refreshInfo()
     }
 
-    private fun refreshInfo() {
-        val seq = ++infoSeq
+    // ---------- info / playlist loading ----------
 
+    private fun isPlaylistUrl(url: String): Boolean {
+        val u = url.lowercase()
+        if (u.contains("/playlist")) return true
+        return u.contains("list=") && !u.contains("v=") && !u.contains("youtu.be/")
+    }
+
+    private fun stopInfoProcess() {
         infoPid?.let {
             try {
                 YoutubeDL.getInstance().destroyProcessById(it)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 // ignore
             }
         }
         infoPid = null
+    }
+
+    private fun refreshInfo() {
+        val seq = ++infoSeq
+        stopInfoProcess()
+
         info = null
         thumb = null
         infoError = false
+        playlist = null
+        playlistHint = false
+        selectedUrls = emptySet()
 
         val url = link.trim()
         if (!url.startsWith("http")) {
@@ -77,6 +97,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         infoLoading = true
+        val asPlaylist = isPlaylistUrl(url)
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -86,22 +107,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 if (seq != infoSeq) return@launch
                 if (Engine.failed) throw Exception("Engine failed")
 
-                val pid = "info-$seq"
-                infoPid = pid
-                val req = YoutubeDLRequest(url)
-                req.addOption("--dump-single-json")
-                req.addOption("--no-playlist")
-                req.addOption("--no-warnings")
-                val resp = YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }
-                if (seq != infoSeq) return@launch
-
-                val parsed = InfoParser.parse(resp.out)
-                val bmp = loadThumb(parsed.thumbnailUrl)
-                if (seq != infoSeq) return@launch
-
-                info = parsed
-                thumb = bmp
-                if (!parsed.sizes.containsKey(quality)) quality = Quality.BEST
+                if (asPlaylist) fetchPlaylist(url, seq) else fetchSingle(url, seq)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -110,6 +116,75 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 if (seq == infoSeq) infoLoading = false
             }
         }
+    }
+
+    private fun fetchSingle(url: String, seq: Int) {
+        val pid = "info-$seq"
+        infoPid = pid
+        val req = YoutubeDLRequest(url)
+        req.addOption("--dump-single-json")
+        req.addOption("--no-playlist")
+        req.addOption("--no-warnings")
+        val resp = YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }
+        if (seq != infoSeq) return
+
+        val parsed = InfoParser.parse(resp.out)
+        val bmp = loadThumb(parsed.thumbnailUrl)
+        if (seq != infoSeq) return
+
+        info = parsed
+        thumb = bmp
+        playlistHint = url.lowercase().contains("list=")
+        if (!parsed.sizes.containsKey(quality)) quality = Quality.BEST
+    }
+
+    private fun fetchPlaylist(url: String, seq: Int) {
+        val pid = "info-$seq"
+        infoPid = pid
+        val req = YoutubeDLRequest(url)
+        req.addOption("--flat-playlist")
+        req.addOption("--dump-single-json")
+        req.addOption("--no-warnings")
+        val resp = YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }
+        if (seq != infoSeq) return
+
+        val parsed = PlaylistParser.parse(resp.out)
+        if (seq != infoSeq) return
+
+        info = null
+        thumb = null
+        playlistHint = false
+        playlist = parsed
+        selectedUrls = parsed.entries.map { it.url }.toSet()
+    }
+
+    /** The link is a video inside a playlist: load the whole playlist instead. */
+    fun loadPlaylistFromHint() {
+        val id = Regex("[?&]list=([A-Za-z0-9_-]+)").find(link)?.groupValues?.get(1) ?: return
+        val seq = ++infoSeq
+        stopInfoProcess()
+        infoLoading = true
+        infoError = false
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                fetchPlaylist("https://www.youtube.com/playlist?list=$id", seq)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (seq == infoSeq) infoError = true
+            } finally {
+                if (seq == infoSeq) infoLoading = false
+            }
+        }
+    }
+
+    fun toggleSelected(url: String) {
+        selectedUrls = if (url in selectedUrls) selectedUrls - url else selectedUrls + url
+    }
+
+    fun selectAll(on: Boolean) {
+        selectedUrls = if (on) playlist?.entries?.map { it.url }?.toSet() ?: emptySet() else emptySet()
     }
 
     private fun loadThumb(url: String?): ImageBitmap? {
@@ -122,34 +197,57 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             val bytes = c.inputStream.use { it.readBytes() }
             val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             null
         }
     }
 
-    fun startDownload() {
+    // ---------- downloading ----------
+
+    private fun newItem(url: String, title: String): QueueItem = QueueItem(
+        id = DownloadCenter.newId(),
+        url = url,
+        title = title,
+        audio = audioOnly,
+        height = if (audioOnly) null else quality.height
+    )
+
+    /** Adds the current link (or the selected playlist videos) to the queue and starts the service. */
+    fun download() {
         val url = link.trim()
         if (!url.startsWith("http")) {
-            DownloadCenter.error = "Please paste a valid link (starting with http)"
+            message = "Please paste a valid link (starting with http)"
             return
         }
-        if (DownloadCenter.downloading || !Engine.ready) return
+        if (!Engine.ready) return
 
-        val title = info?.title ?: "Video"
-        DownloadCenter.prepare(title)
-
-        val intent = Intent(ctx, DownloadService::class.java).apply {
-            action = DownloadService.ACTION_START
-            putExtra(DownloadService.EXTRA_URL, url)
-            putExtra(DownloadService.EXTRA_AUDIO, audioOnly)
-            putExtra(DownloadService.EXTRA_HEIGHT, quality.height ?: -1)
-            putExtra(DownloadService.EXTRA_TITLE, title)
+        val pl = playlist
+        val items: List<QueueItem> = if (pl != null) {
+            val chosen = pl.entries.filter { it.url in selectedUrls }
+            if (chosen.isEmpty()) {
+                message = "Select at least one video"
+                return
+            }
+            chosen.map { newItem(it.url, it.title) }
+        } else {
+            val title = info?.title ?: url.removePrefix("https://").removePrefix("http://").take(40)
+            listOf(newItem(url, title))
         }
+
+        DownloadCenter.enqueue(items)
+
+        val intent = Intent(ctx, DownloadService::class.java).setAction(DownloadService.ACTION_START)
         try {
             ContextCompat.startForegroundService(ctx, intent)
-        } catch (e: Exception) {
-            DownloadCenter.downloading = false
-            DownloadCenter.error = "Could not start the download service"
+        } catch (e: Throwable) {
+            items.forEach {
+                it.error = "Could not start the download service"
+                it.stage = "Failed"
+                it.status = Status.FAILED
+            }
         }
+
+        // Clear the box so the next link can be pasted right away
+        onLinkChange("")
     }
 }

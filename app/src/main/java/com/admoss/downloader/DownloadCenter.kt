@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.yausername.youtubedl_android.YoutubeDL
@@ -16,28 +17,51 @@ import java.io.File
 
 data class HistoryItem(val title: String, val uri: String, val audio: Boolean)
 
+enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
+
+/** One download in the queue. */
+class QueueItem(
+    val id: Long,
+    val url: String,
+    val title: String,
+    val audio: Boolean,
+    val height: Int?
+) {
+    var status by mutableStateOf(Status.WAITING)
+    var progress by mutableStateOf(0f) // 0..1
+    var eta by mutableStateOf(-1L)
+    var stage by mutableStateOf("Waiting in queue")
+    var error by mutableStateOf<String?>(null)
+
+    @Volatile
+    var cancelled = false
+}
+
 /**
- * Process-wide download state. The foreground service writes to it,
- * the Compose UI reads from it, so progress survives rotation and leaving the app.
+ * Process-wide download state. The foreground service works through the queue,
+ * the Compose UI reads from it, so everything survives rotation and leaving the app.
  */
 object DownloadCenter {
 
-    var downloading by mutableStateOf(false)
-    var progress by mutableStateOf(0f) // 0..1
-    var eta by mutableStateOf(-1L)
-    var stage by mutableStateOf("")
-    var title by mutableStateOf("")
-    var error by mutableStateOf<String?>(null)
-    var success by mutableStateOf<String?>(null)
+    val queue = mutableStateListOf<QueueItem>()
     var history by mutableStateOf<List<HistoryItem>>(emptyList())
-
-    @Volatile
-    private var cancelled = false
 
     @Volatile
     private var currentPid: String? = null
 
+    @Volatile
+    private var currentItem: QueueItem? = null
+
     private var loaded = false
+    private var lastId = 0L
+
+    val activeCount: Int
+        get() = queue.count { it.status == Status.WAITING || it.status == Status.DOWNLOADING }
+
+    val finishedCount: Int
+        get() = queue.count {
+            it.status == Status.DONE || it.status == Status.FAILED || it.status == Status.CANCELLED
+        }
 
     fun init(ctx: Context) {
         if (loaded) return
@@ -45,31 +69,53 @@ object DownloadCenter {
         history = loadHistory(ctx)
     }
 
-    fun prepare(newTitle: String) {
-        title = newTitle
-        error = null
-        success = null
-        cancelled = false
-        downloading = true
-        progress = 0f
-        eta = -1L
-        stage = "Starting…"
+    @Synchronized
+    fun newId(): Long = ++lastId
+
+    fun enqueue(items: List<QueueItem>) {
+        queue.addAll(items)
     }
 
-    fun cancel() {
-        cancelled = true
-        stage = "Cancelling…"
-        currentPid?.let {
-            try {
-                YoutubeDL.getInstance().destroyProcessById(it)
-            } catch (e: Exception) {
-                // ignore
+    fun nextWaiting(): QueueItem? = queue.firstOrNull { it.status == Status.WAITING }
+
+    fun hasWaiting(): Boolean = nextWaiting() != null
+
+    fun cancelItem(item: QueueItem) {
+        when (item.status) {
+            Status.WAITING -> {
+                item.cancelled = true
+                item.status = Status.CANCELLED
+                item.stage = "Cancelled"
             }
+            Status.DOWNLOADING -> {
+                item.cancelled = true
+                item.stage = "Cancelling…"
+                if (currentItem === item) {
+                    currentPid?.let {
+                        try {
+                            YoutubeDL.getInstance().destroyProcessById(it)
+                        } catch (e: Throwable) {
+                            // ignore
+                        }
+                    }
+                }
+            }
+            else -> {}
         }
     }
 
-    fun clearHistory(ctx: Context) {
-        history = emptyList()
+    fun cancelAll() {
+        queue.toList().forEach { cancelItem(it) }
+    }
+
+    fun clearFinished() {
+        queue.removeAll {
+            it.status == Status.DONE || it.status == Status.FAILED || it.status == Status.CANCELLED
+        }
+    }
+
+    fun removeHistory(ctx: Context, item: HistoryItem) {
+        history = history.filter { it.uri != item.uri }
         saveHistory(ctx)
     }
 
@@ -77,15 +123,15 @@ object DownloadCenter {
      * Blocking: call from a background thread (the service does).
      * Returns the saved file, or null if it failed or was cancelled.
      */
-    fun run(
-        ctx: Context,
-        url: String,
-        audio: Boolean,
-        height: Int?,
-        onNotify: (Int, String) -> Unit
-    ): HistoryItem? {
-        val id = "admoss-${System.currentTimeMillis()}"
+    fun runItem(ctx: Context, item: QueueItem, onNotify: (Int, String) -> Unit): HistoryItem? {
+        val id = "admoss-${item.id}"
         currentPid = id
+        currentItem = item
+        item.status = Status.DOWNLOADING
+        item.stage = "Starting…"
+        item.progress = 0f
+        item.eta = -1L
+
         val tmp = File(ctx.cacheDir, "dl/$id").apply { mkdirs() }
         var result: HistoryItem? = null
 
@@ -96,21 +142,26 @@ object DownloadCenter {
                 waited++
             }
             if (!Engine.ready) throw Exception("Download engine is not ready")
-            if (cancelled) return null
+            if (item.cancelled) {
+                item.status = Status.CANCELLED
+                item.stage = "Cancelled"
+                return null
+            }
 
-            val req = YoutubeDLRequest(url)
+            val req = YoutubeDLRequest(item.url)
             req.addOption("--no-playlist")
             req.addOption("--no-mtime")
             req.addOption("-o", "${tmp.absolutePath}/%(title).80s.%(ext)s")
 
-            if (audio) {
+            if (item.audio) {
                 req.addOption("-x")
                 req.addOption("--audio-format", "mp3")
                 req.addOption("--audio-quality", "192K")
             } else {
                 // Prefer H.264 + AAC so the file plays everywhere
-                val sort = if (height != null) {
-                    "res:$height,vcodec:h264,acodec:aac"
+                val h = item.height
+                val sort = if (h != null) {
+                    "res:$h,vcodec:h264,acodec:aac"
                 } else {
                     "vcodec:h264,acodec:aac"
                 }
@@ -120,54 +171,67 @@ object DownloadCenter {
 
             var lastPct = -1
             YoutubeDL.getInstance().execute(req, id) { p, etaSec, line ->
-                if (p >= 0f) progress = (p / 100f).coerceIn(0f, 1f)
-                eta = etaSec
+                if (p >= 0f) item.progress = (p / 100f).coerceIn(0f, 1f)
+                item.eta = etaSec
                 var changed = false
                 when {
                     line.contains("[Merger]") -> {
-                        stage = "Merging video & audio…"
+                        item.stage = "Merging video & audio…"
                         changed = true
                     }
                     line.contains("[ExtractAudio]") -> {
-                        stage = "Converting to MP3…"
+                        item.stage = "Converting to MP3…"
                         changed = true
                     }
-                    line.contains("[download]") && stage != "Downloading…" -> {
-                        stage = "Downloading…"
+                    line.contains("[download]") && item.stage != "Downloading…" -> {
+                        item.stage = "Downloading…"
                         changed = true
                     }
                     else -> {}
                 }
-                val pct = (progress * 100).toInt()
+                val pct = (item.progress * 100).toInt()
                 if (pct != lastPct || changed) {
                     lastPct = pct
-                    onNotify(pct, stage)
+                    onNotify(pct, item.stage)
                 }
             }
 
-            if (cancelled) return null
+            if (item.cancelled) {
+                item.status = Status.CANCELLED
+                item.stage = "Cancelled"
+                return null
+            }
 
-            stage = "Saving to your phone…"
-            onNotify(100, stage)
+            item.stage = "Saving to your phone…"
+            onNotify(100, item.stage)
             val out = tmp.listFiles()
                 ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
                 ?.maxByOrNull { it.length() }
                 ?: throw Exception("Download finished but no file was found")
 
-            val uri = saveToMediaStore(ctx, out, audio)
-            progress = 1f
+            val uri = saveToMediaStore(ctx, out, item.audio)
 
-            val item = HistoryItem(out.nameWithoutExtension, uri.toString(), audio)
-            history = (listOf(item) + history).take(50)
+            val saved = HistoryItem(out.nameWithoutExtension, uri.toString(), item.audio)
+            history = (listOf(saved) + history).take(100)
             saveHistory(ctx)
-            success = if (audio) "Saved to Music/ADMOSS" else "Saved to Movies/ADMOSS"
-            result = item
+
+            item.progress = 1f
+            item.stage = if (item.audio) "Saved to Music/ADMOSS" else "Saved to Movies/ADMOSS"
+            item.status = Status.DONE
+            result = saved
         } catch (e: Throwable) {
-            if (!cancelled) error = cleanError(e)
+            if (item.cancelled) {
+                item.status = Status.CANCELLED
+                item.stage = "Cancelled"
+            } else {
+                item.error = cleanError(e)
+                item.stage = "Failed"
+                item.status = Status.FAILED
+            }
         } finally {
             tmp.deleteRecursively()
-            downloading = false
             currentPid = null
+            currentItem = null
         }
         return result
     }
@@ -230,7 +294,7 @@ object DownloadCenter {
             val o = arr.getJSONObject(it)
             HistoryItem(o.getString("t"), o.getString("u"), o.getBoolean("a"))
         }
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         emptyList()
     }
 
