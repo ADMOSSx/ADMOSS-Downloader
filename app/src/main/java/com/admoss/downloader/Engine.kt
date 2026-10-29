@@ -14,7 +14,7 @@ import kotlin.concurrent.thread
  * Starts the yt-dlp + ffmpeg engine once for the whole app (UI and service share it).
  *
  * The Compose state values (ready / failed ...) are only changed on the main thread.
- * Background code should check the plain isReady / isFailed flags instead.
+ * Background code should check the plain upFlag / downFlag flags instead.
  */
 object Engine {
     var ready by mutableStateOf(false)
@@ -23,10 +23,10 @@ object Engine {
     var failure by mutableStateOf<String?>(null)
 
     @Volatile
-    var isReady = false
+    var upFlag = false
 
     @Volatile
-    var isFailed = false
+    var downFlag = false
 
     @Volatile
     private var started = false
@@ -37,19 +37,19 @@ object Engine {
     fun start(context: Context) {
         if (started) return
         started = true
-        isFailed = false
+        downFlag = false
         val app = context.applicationContext
         thread(name = "admoss-engine") {
             try {
                 YoutubeDL.getInstance().init(app)
                 FFmpeg.getInstance().init(app)
-                isReady = true
+                upFlag = true
                 main.post {
                     failed = false
                     ready = true
                 }
             } catch (e: Throwable) {
-                isFailed = true
+                downFlag = true
                 val reason = e.message ?: e.javaClass.simpleName
                 main.post {
                     failed = true
