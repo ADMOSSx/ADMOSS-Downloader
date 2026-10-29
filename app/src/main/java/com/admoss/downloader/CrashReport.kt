@@ -10,6 +10,9 @@ import java.io.File
 class AdmossApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Create the shared state objects here (outside Compose) and start the engine early
+        DownloadCenter.init(this)
+        Engine.start(this)
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try {

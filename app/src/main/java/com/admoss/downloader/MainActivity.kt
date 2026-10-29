@@ -396,6 +396,10 @@ private fun DownloadTab(vm: DownloadViewModel) {
                 item { MessageCard(msg) }
             }
 
+            if (Engine.failed) {
+                item { MessageCard("Engine error: ${Engine.failure ?: "unknown"}") }
+            }
+
             if (DownloadCenter.queue.isNotEmpty()) {
                 item { QueueHeader() }
                 val queueList = DownloadCenter.queue.toList()
@@ -776,6 +780,7 @@ private fun FormatTab(
 private fun DownloadButton(vm: DownloadViewModel) {
     val p = LocalPalette.current
     val focus = LocalFocusManager.current
+    val context = LocalContext.current
     val pl = vm.playlist
     val selectedCount = vm.selectedUrls.size
     val enabled = Engine.ready && vm.link.isNotBlank() && (pl == null || selectedCount > 0)
@@ -794,9 +799,9 @@ private fun DownloadButton(vm: DownloadViewModel) {
             .background(
                 if (enabled) Brand else Brush.horizontalGradient(listOf(off, off))
             )
-            .clickable(enabled = enabled) {
+            .clickable(enabled = enabled || Engine.failed) {
                 focus.clearFocus()
-                vm.download()
+                if (Engine.failed) Engine.retry(context) else vm.download()
             },
         contentAlignment = Alignment.Center
     ) {

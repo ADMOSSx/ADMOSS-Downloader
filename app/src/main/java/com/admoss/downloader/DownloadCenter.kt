@@ -137,11 +137,11 @@ object DownloadCenter {
 
         try {
             var waited = 0
-            while (!Engine.ready && !Engine.failed && waited < 120) {
+            while (!Engine.isReady && !Engine.isFailed && waited < 120) {
                 Thread.sleep(500)
                 waited++
             }
-            if (!Engine.ready) throw Exception("Download engine is not ready")
+            if (!Engine.isReady) throw Exception("Download engine is not ready")
             if (item.cancelled) {
                 item.status = Status.CANCELLED
                 item.stage = "Cancelled"

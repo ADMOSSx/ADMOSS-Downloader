@@ -103,9 +103,9 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 delay(600) // wait while the user is still typing / pasting
                 if (seq != infoSeq) return@launch
-                while (!Engine.ready && !Engine.failed) delay(200)
+                while (!Engine.isReady && !Engine.isFailed) delay(200)
                 if (seq != infoSeq) return@launch
-                if (Engine.failed) throw Exception("Engine failed")
+                if (Engine.isFailed) throw Exception("Engine failed")
 
                 if (asPlaylist) fetchPlaylist(url, seq) else fetchSingle(url, seq)
             } catch (e: CancellationException) {
