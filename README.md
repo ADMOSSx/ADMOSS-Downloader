@@ -37,6 +37,7 @@
 | 🔎 | **Library tab** with search for your finished downloads |
 | 🗂️ | **Playlists section**: downloaded playlists are saved as folders with all videos in order, open one and tap **Play all** |
 | ▶️ | **Built-in player** that plays a playlist video after video |
+| 🔄 | **In-app updates**: the app checks the latest GitHub release and installs the new version over the old one |
 | 📋 | One-tap **Paste**, automatic site detection |
 | 🔗 | **Share to ADMOSS Downloader** from the YouTube and TikTok apps |
 | 📁 | Saves to `Movies/ADMOSS` and `Music/ADMOSS` |
@@ -79,6 +80,13 @@
 1. Open the project folder in Android Studio
 2. Wait for Gradle to sync
 3. Press **Run**
+
+### Permanent signing key (so updates install over the old version)
+
+1. Create a keystore (a file that identifies your app) and keep it private.
+2. In your repo go to **Settings > Secrets and variables > Actions** and add these secrets:
+   `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
+3. Every build is now signed with the same key, so Android installs new versions over the old one.
 
 ### Publish a release automatically
 

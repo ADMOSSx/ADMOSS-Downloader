@@ -1,0 +1,11 @@
+# Never upload the signing key
+*.keystore
+*.jks
+KEYSTORE_BASE64.txt
+SECRETS.txt
+
+# Build output
+build/
+.gradle/
+local.properties
+.idea/

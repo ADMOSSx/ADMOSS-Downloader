@@ -134,7 +134,10 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         ThemeSettings.load(this)
-        if (savedInstanceState == null) handleIntent(intent)
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+            Updater.check(this, false)
+        }
         setContent { AdmossRoot { vm } }
     }
 
@@ -375,6 +378,10 @@ private fun DownloadTab(vm: DownloadViewModel) {
         ) {
             item { Header() }
 
+            if (Updater.available != null || Updater.message != null) {
+                item { UpdateArea() }
+            }
+
             item {
                 LinkCard(vm) { vm.setSharedText(clipboard.getText()?.text.orEmpty()) }
             }
@@ -444,10 +451,104 @@ private fun Header() {
                 letterSpacing = 4.sp,
                 color = p.text
             )
-            Text("YouTube  •  TikTok  •  and more", fontSize = 12.sp, color = p.sub)
+            Text("YouTube  •  TikTok  •  v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = p.sub)
+        }
+        IconButton(onClick = { Updater.check(context, true) }) {
+            Ico(R.drawable.ic_refresh, p.text, 22.dp, "Check for updates")
         }
         IconButton(onClick = { ThemeSettings.set(context, !p.dark) }) {
             Ico(if (p.dark) R.drawable.ic_sun else R.drawable.ic_moon, p.text, 24.dp, "Switch theme")
+        }
+    }
+}
+
+@Composable
+private fun UpdateArea() {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+    val info = Updater.available
+    val msg = Updater.message
+
+    if (info != null) {
+        GlassCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Brand),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Ico(R.drawable.ic_download, Color.White, 24.dp)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Update available", color = p.text, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    val sizeText = if (info.size > 0) "  •  ${formatSize(info.size)}" else ""
+                    Text("Version ${info.version}$sizeText", color = p.sub, fontSize = 13.sp)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (Updater.downloading) {
+                LinearProgressIndicator(
+                    progress = { Updater.progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(50)),
+                    color = Violet,
+                    trackColor = p.border
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Downloading update…  ${(Updater.progress * 100).toInt()}%",
+                    color = p.sub,
+                    fontSize = 12.sp
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Brand)
+                            .clickable { Updater.downloadAndInstall(context) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "UPDATE NOW",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp,
+                            fontSize = 14.sp
+                        )
+                    }
+                    TextButton(onClick = { Updater.available = null }) {
+                        Text("Later", color = p.sub)
+                    }
+                }
+            }
+            if (msg != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(msg, color = Orange, fontSize = 12.sp)
+            }
+        }
+    } else if (msg != null) {
+        val shape = RoundedCornerShape(18.dp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(p.card)
+                .border(1.dp, p.border, shape)
+                .clickable { Updater.message = null }
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Ico(R.drawable.ic_refresh, p.accent, 22.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(msg, color = p.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
         }
     }
 }
