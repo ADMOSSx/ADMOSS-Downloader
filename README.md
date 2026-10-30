@@ -35,6 +35,8 @@
 | 🔔 | **Background downloads** with a notification (progress, cancel, tap to open) |
 | 🌗 | Modern UI with **dark and light themes** (switch with the sun/moon button) |
 | 🔎 | **Library tab** with search for your finished downloads |
+| 🗂️ | **Playlists section**: downloaded playlists are saved as folders with all videos in order, open one and tap **Play all** |
+| ▶️ | **Built-in player** that plays a playlist video after video |
 | 📋 | One-tap **Paste**, automatic site detection |
 | 🔗 | **Share to ADMOSS Downloader** from the YouTube and TikTok apps |
 | 📁 | Saves to `Movies/ADMOSS` and `Music/ADMOSS` |
@@ -112,6 +114,7 @@ ADMOSS-Downloader/
 │       │   ├── DownloadViewModel.kt # link, options, video info
 │       │   ├── DownloadService.kt   # background service + notifications
 │       │   ├── DownloadCenter.kt    # download logic, progress, saving
+│       │   ├── PlayerActivity.kt    # built-in player
 │       │   ├── VideoInfo.kt         # title / size estimates
 │       │   └── Engine.kt            # yt-dlp + ffmpeg startup
 │       └── res/                     # theme, colors, app icon, vector icons

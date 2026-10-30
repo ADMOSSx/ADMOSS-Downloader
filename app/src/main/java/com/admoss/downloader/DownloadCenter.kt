@@ -15,7 +15,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-data class HistoryItem(val title: String, val uri: String, val audio: Boolean)
+data class HistoryItem(
+    val title: String,
+    val uri: String,
+    val audio: Boolean,
+    val playlist: String? = null,
+    val index: Int = 0
+)
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
 
@@ -25,7 +31,9 @@ class QueueItem(
     val url: String,
     val title: String,
     val audio: Boolean,
-    val height: Int?
+    val height: Int?,
+    val playlist: String? = null,
+    val index: Int = 0
 ) {
     var status by mutableStateOf(Status.WAITING)
     var progress by mutableStateOf(0f) // 0..1
@@ -112,6 +120,11 @@ object DownloadCenter {
         queue.removeAll {
             it.status == Status.DONE || it.status == Status.FAILED || it.status == Status.CANCELLED
         }
+    }
+
+    fun removePlaylist(ctx: Context, name: String) {
+        history = history.filter { it.playlist != name }
+        saveHistory(ctx)
     }
 
     fun removeHistory(ctx: Context, item: HistoryItem) {
@@ -211,7 +224,7 @@ object DownloadCenter {
 
             val uri = saveToMediaStore(ctx, out, item.audio)
 
-            val saved = HistoryItem(out.nameWithoutExtension, uri.toString(), item.audio)
+            val saved = HistoryItem(out.nameWithoutExtension, uri.toString(), item.audio, item.playlist, item.index)
             history = (listOf(saved) + history).take(100)
             saveHistory(ctx)
 
@@ -292,7 +305,10 @@ object DownloadCenter {
         val arr = JSONArray(prefs.getString("history", "[]"))
         (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
-            HistoryItem(o.getString("t"), o.getString("u"), o.getBoolean("a"))
+            HistoryItem(
+                o.getString("t"), o.getString("u"), o.getBoolean("a"),
+                o.optString("p", "").ifBlank { null }, o.optInt("i", 0)
+            )
         }
     } catch (e: Throwable) {
         emptyList()
@@ -301,7 +317,10 @@ object DownloadCenter {
     private fun saveHistory(ctx: Context) {
         val arr = JSONArray()
         history.forEach {
-            arr.put(JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio))
+            arr.put(
+                JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
+                    .put("p", it.playlist ?: "").put("i", it.index)
+            )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)
             .edit().putString("history", arr.toString()).apply()

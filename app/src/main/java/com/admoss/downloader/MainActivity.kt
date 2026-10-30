@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -982,14 +983,210 @@ private fun QueueRow(item: QueueItem) {
 
 // ---------- library tab ----------
 
+private fun playItems(context: Context, items: List<HistoryItem>, start: Int) {
+    if (items.isEmpty()) return
+    val i = Intent(context, PlayerActivity::class.java)
+        .putStringArrayListExtra(PlayerActivity.EXTRA_URIS, ArrayList(items.map { it.uri }))
+        .putStringArrayListExtra(PlayerActivity.EXTRA_TITLES, ArrayList(items.map { it.title }))
+        .putExtra(PlayerActivity.EXTRA_START, start)
+    context.startActivity(i)
+}
+
 @Composable
 private fun LibraryTab() {
     val p = LocalPalette.current
     val context = LocalContext.current
+    var mode by rememberSaveable { mutableStateOf(0) } // 0 = all downloads, 1 = playlists
+    var openName by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
 
-    val all = DownloadCenter.history
-    val shown = if (query.isBlank()) all else all.filter { it.title.contains(query, ignoreCase = true) }
+    BackHandler(enabled = openName != null) { openName = null }
+
+    val name = openName
+    if (name != null) {
+        PlaylistDetail(name) { openName = null }
+    } else {
+        val all = DownloadCenter.history
+        val groups = all.filter { it.playlist != null }.groupBy { it.playlist ?: "" }
+        val groupNames = groups.keys.toList().filter { query.isBlank() || it.contains(query, ignoreCase = true) }
+        val shown = if (query.isBlank()) all else all.filter { it.title.contains(query, ignoreCase = true) }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Column {
+                    Text("Library", color = p.text, fontWeight = FontWeight.Black, fontSize = 24.sp)
+                    Text(
+                        if (mode == 0) "${all.size} downloads" else "${groups.size} playlists",
+                        color = p.sub,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            item {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(p.border.copy(alpha = 0.5f))
+                        .padding(4.dp)
+                ) {
+                    FormatTab("All downloads", R.drawable.ic_library, mode == 0, Modifier.weight(1f)) { mode = 0 }
+                    FormatTab("Playlists", R.drawable.ic_playlist, mode == 1, Modifier.weight(1f)) { mode = 1 }
+                }
+            }
+
+            item {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text(if (mode == 0) "Search your downloads" else "Search playlists") },
+                    leadingIcon = { Ico(R.drawable.ic_search, p.sub, 22.dp) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) { Ico(R.drawable.ic_close, p.sub, 20.dp, "Clear") }
+                        }
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = p.accent,
+                        unfocusedBorderColor = p.border,
+                        focusedTextColor = p.text,
+                        unfocusedTextColor = p.text,
+                        cursorColor = p.accent,
+                        focusedPlaceholderColor = p.sub,
+                        unfocusedPlaceholderColor = p.sub
+                    )
+                )
+            }
+
+            if (mode == 0) {
+                if (all.isEmpty()) {
+                    item {
+                        Text(
+                            "Nothing here yet. Your finished downloads will show up in this list.",
+                            color = p.sub,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 24.dp)
+                        )
+                    }
+                } else if (shown.isEmpty()) {
+                    item {
+                        Text(
+                            "No downloads match \"$query\".",
+                            color = p.sub,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 24.dp)
+                        )
+                    }
+                }
+
+                items(shown, key = { it.uri }) { item ->
+                    HistoryRow(
+                        item,
+                        onOpen = { playItems(context, listOf(item), 0) },
+                        onRemove = { DownloadCenter.removeHistory(context, item) }
+                    )
+                }
+            } else {
+                if (groups.isEmpty()) {
+                    item {
+                        Text(
+                            "No playlists yet. Download a playlist from the Download tab and it will appear here, with all its videos in order.",
+                            color = p.sub,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 24.dp)
+                        )
+                    }
+                } else if (groupNames.isEmpty()) {
+                    item {
+                        Text(
+                            "No playlists match \"$query\".",
+                            color = p.sub,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 24.dp)
+                        )
+                    }
+                }
+
+                items(groupNames, key = { it }) { groupName ->
+                    val videos = (groups[groupName] ?: emptyList()).sortedBy { it.index }
+                    PlaylistCard(
+                        name = groupName,
+                        count = videos.size,
+                        onOpen = { openName = groupName },
+                        onPlay = { playItems(context, videos, 0) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistCard(name: String, count: Int, onOpen: () -> Unit, onPlay: () -> Unit) {
+    val p = LocalPalette.current
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.card)
+            .border(1.dp, p.border, shape)
+            .clickable { onOpen() }
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Brand),
+            contentAlignment = Alignment.Center
+        ) {
+            Ico(R.drawable.ic_playlist, Color.White, 28.dp)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                color = p.text,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (count == 1) "1 video" else "$count videos",
+                color = p.sub,
+                fontSize = 12.sp
+            )
+        }
+        IconButton(onClick = onPlay) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(p.accent.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Ico(R.drawable.ic_play, p.accent, 22.dp, "Play all")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistDetail(name: String, onBack: () -> Unit) {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+    val videos = DownloadCenter.history.filter { it.playlist == name }.sortedBy { it.index }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -997,64 +1194,119 @@ private fun LibraryTab() {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Column {
-                Text("Library", color = p.text, fontWeight = FontWeight.Black, fontSize = 24.sp)
-                Text("${all.size} downloads", color = p.sub, fontSize = 13.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Ico(R.drawable.ic_back, p.text, 24.dp, "Back") }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        name,
+                        color = p.text,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 20.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        if (videos.size == 1) "1 video" else "${videos.size} videos",
+                        color = p.sub,
+                        fontSize = 13.sp
+                    )
+                }
             }
+        }
+
+        if (videos.isNotEmpty()) {
+            item {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Brand)
+                        .clickable { playItems(context, videos, 0) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Ico(R.drawable.ic_play, Color.White, 24.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "PLAY ALL",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 2.sp,
+                            fontSize = 15.sp
+                        )
+                    }
+                }
+            }
+        } else {
+            item {
+                Text("This playlist is empty.", color = p.sub, fontSize = 14.sp)
+            }
+        }
+
+        itemsIndexed(videos, key = { _, v -> v.uri }) { i, v ->
+            PlaylistVideoRow(
+                number = i + 1,
+                item = v,
+                onPlay = { playItems(context, videos, i) },
+                onRemove = { DownloadCenter.removeHistory(context, v) }
+            )
         }
 
         item {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text("Search your downloads") },
-                leadingIcon = { Ico(R.drawable.ic_search, p.sub, 22.dp) },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) { Ico(R.drawable.ic_close, p.sub, 20.dp, "Clear") }
-                    }
-                },
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = p.accent,
-                    unfocusedBorderColor = p.border,
-                    focusedTextColor = p.text,
-                    unfocusedTextColor = p.text,
-                    cursorColor = p.accent,
-                    focusedPlaceholderColor = p.sub,
-                    unfocusedPlaceholderColor = p.sub
-                )
-            )
-        }
-
-        if (all.isEmpty()) {
-            item {
-                Text(
-                    "Nothing here yet. Your finished downloads will show up in this list.",
-                    color = p.sub,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 24.dp)
-                )
-            }
-        } else if (shown.isEmpty()) {
-            item {
-                Text(
-                    "No downloads match \"$query\".",
-                    color = p.sub,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 24.dp)
-                )
+            TextButton(onClick = {
+                DownloadCenter.removePlaylist(context, name)
+                onBack()
+            }) {
+                Text("Remove this playlist from the list", color = Pink)
             }
         }
+    }
+}
 
-        items(shown, key = { it.uri }) { item ->
-            HistoryRow(
-                item,
-                onOpen = { openItem(context, item) },
-                onRemove = { DownloadCenter.removeHistory(context, item) }
+@Composable
+private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit, onRemove: () -> Unit) {
+    val p = LocalPalette.current
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.card)
+            .border(1.dp, p.border, shape)
+            .clickable { onPlay() }
+            .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(p.accent.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("$number", color = p.accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.title,
+                color = p.text,
+                fontSize = 14.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
+            Text(
+                if (item.audio) "Audio" else "Video",
+                color = p.sub,
+                fontSize = 11.sp
+            )
+        }
+        IconButton(onClick = onPlay) {
+            Ico(R.drawable.ic_play, p.accent, 24.dp, "Play")
+        }
+        IconButton(onClick = onRemove) {
+            Ico(R.drawable.ic_delete, p.sub, 20.dp, "Remove from list")
         }
     }
 }

@@ -204,12 +204,14 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- downloading ----------
 
-    private fun newItem(url: String, title: String): QueueItem = QueueItem(
+    private fun newItem(url: String, title: String, playlist: String? = null, index: Int = 0): QueueItem = QueueItem(
         id = DownloadCenter.newId(),
         url = url,
         title = title,
         audio = audioOnly,
-        height = if (audioOnly) null else quality.height
+        height = if (audioOnly) null else quality.height,
+        playlist = playlist,
+        index = index
     )
 
     /** Adds the current link (or the selected playlist videos) to the queue and starts the service. */
@@ -223,12 +225,12 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
         val pl = playlist
         val items: List<QueueItem> = if (pl != null) {
-            val chosen = pl.entries.filter { it.url in selectedUrls }
+            val chosen = pl.entries.withIndex().filter { it.value.url in selectedUrls }
             if (chosen.isEmpty()) {
                 message = "Select at least one video"
                 return
             }
-            chosen.map { newItem(it.url, it.title) }
+            chosen.map { newItem(it.value.url, it.value.title, pl.title, it.index) }
         } else {
             val title = info?.title ?: url.removePrefix("https://").removePrefix("http://").take(40)
             listOf(newItem(url, title))
