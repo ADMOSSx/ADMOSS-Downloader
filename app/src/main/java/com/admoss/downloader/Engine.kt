@@ -21,6 +21,8 @@ object Engine {
     var failed by mutableStateOf(false)
     var message by mutableStateOf("Preparing engine…")
     var failure by mutableStateOf<String?>(null)
+    var updating by mutableStateOf(false)
+    var updateMessage by mutableStateOf<String?>(null)
 
     @Volatile
     var upFlag = false
@@ -76,5 +78,31 @@ object Engine {
             message = "Preparing engine…"
         }
         start(context)
+    }
+
+    /** Downloads the newest yt-dlp. Fixes most "couldn't load video info" problems. */
+    fun updateNow(context: Context) {
+        if (updating || !upFlag) return
+        val app = context.applicationContext
+        main.post {
+            updating = true
+            updateMessage = null
+        }
+        thread(name = "admoss-engine-update") {
+            val text = try {
+                val status = YoutubeDL.getInstance().updateYoutubeDL(app)
+                when (status.toString()) {
+                    "ALREADY_UP_TO_DATE" -> "The engine is already up to date. Try the link again."
+                    "DONE" -> "Engine updated. Try the link again."
+                    else -> "Engine update finished. Try the link again."
+                }
+            } catch (e: Throwable) {
+                "Update failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+            main.post {
+                updating = false
+                updateMessage = text
+            }
+        }
     }
 }

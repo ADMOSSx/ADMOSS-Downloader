@@ -36,6 +36,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     var thumb by mutableStateOf<ImageBitmap?>(null)
     var infoLoading by mutableStateOf(false)
     var infoError by mutableStateOf(false)
+    var infoErrorText by mutableStateOf<String?>(null)
 
     // ---- playlist ----
     var playlist by mutableStateOf<PlaylistInfo?>(null)
@@ -87,6 +88,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         info = null
         thumb = null
         infoError = false
+        infoErrorText = null
         playlist = null
         playlistHint = false
         selectedUrls = emptySet()
@@ -111,24 +113,44 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                if (seq == infoSeq) infoError = true
+                if (seq == infoSeq) {
+                    infoError = true
+                    infoErrorText = DownloadCenter.cleanError(e)
+                }
             } finally {
                 if (seq == infoSeq) infoLoading = false
             }
         }
     }
 
-    private fun fetchSingle(url: String, seq: Int) {
+    private fun runJson(url: String, pid: String, flat: Boolean, fallback: Boolean): String {
+        val req = YoutubeDLRequest(url)
+        if (flat) req.addOption("--flat-playlist") else req.addOption("--no-playlist")
+        req.addOption("--dump-single-json")
+        req.addOption("--no-warnings")
+        if (fallback) YtOptions.addFallback(req)
+        return YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }.out
+    }
+
+    /** Tries normally, then once more with the fallback settings. */
+    private fun runJsonWithRetry(url: String, seq: Int, flat: Boolean): String {
         val pid = "info-$seq"
         infoPid = pid
-        val req = YoutubeDLRequest(url)
-        req.addOption("--dump-single-json")
-        req.addOption("--no-playlist")
-        req.addOption("--no-warnings")
-        val resp = YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }
+        return try {
+            runJson(url, pid, flat, false)
+        } catch (e: Throwable) {
+            if (seq != infoSeq || !YtOptions.shouldRetry(e)) throw e
+            val pid2 = "info-$seq-b"
+            infoPid = pid2
+            runJson(url, pid2, flat, true)
+        }
+    }
+
+    private fun fetchSingle(url: String, seq: Int) {
+        val raw = runJsonWithRetry(url, seq, false)
         if (seq != infoSeq) return
 
-        val parsed = InfoParser.parse(resp.out)
+        val parsed = InfoParser.parse(raw)
         val bmp = loadThumb(parsed.thumbnailUrl)
         if (seq != infoSeq) return
 
@@ -139,16 +161,10 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun fetchPlaylist(url: String, seq: Int) {
-        val pid = "info-$seq"
-        infoPid = pid
-        val req = YoutubeDLRequest(url)
-        req.addOption("--flat-playlist")
-        req.addOption("--dump-single-json")
-        req.addOption("--no-warnings")
-        val resp = YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }
+        val raw = runJsonWithRetry(url, seq, true)
         if (seq != infoSeq) return
 
-        val parsed = PlaylistParser.parse(resp.out)
+        val parsed = PlaylistParser.parse(raw)
         if (seq != infoSeq) return
 
         info = null
@@ -158,6 +174,10 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         selectedUrls = parsed.entries.map { it.url }.toSet()
     }
 
+    fun retryInfo() {
+        refreshInfo()
+    }
+
     /** The link is a video inside a playlist: load the whole playlist instead. */
     fun loadPlaylistFromHint() {
         val id = Regex("[?&]list=([A-Za-z0-9_-]+)").find(link)?.groupValues?.get(1) ?: return
@@ -165,6 +185,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         stopInfoProcess()
         infoLoading = true
         infoError = false
+        infoErrorText = null
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -172,7 +193,10 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                if (seq == infoSeq) infoError = true
+                if (seq == infoSeq) {
+                    infoError = true
+                    infoErrorText = DownloadCenter.cleanError(e)
+                }
             } finally {
                 if (seq == infoSeq) infoLoading = false
             }

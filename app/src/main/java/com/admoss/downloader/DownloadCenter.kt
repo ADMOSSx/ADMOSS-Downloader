@@ -167,51 +167,65 @@ object DownloadCenter {
                 return null
             }
 
-            val req = YoutubeDLRequest(item.url)
-            req.addOption("--no-playlist")
-            req.addOption("--no-mtime")
-            req.addOption("-o", "${tmp.absolutePath}/%(title).80s.%(ext)s")
-
-            if (item.audio) {
-                req.addOption("-x")
-                req.addOption("--audio-format", "mp3")
-                req.addOption("--audio-quality", "192K")
-            } else {
-                // Prefer H.264 + AAC so the file plays everywhere
-                val h = item.height
-                val sort = if (h != null) {
-                    "res:$h,vcodec:h264,acodec:aac"
-                } else {
-                    "vcodec:h264,acodec:aac"
-                }
-                req.addOption("-S", sort)
-                req.addOption("--merge-output-format", "mp4")
-            }
-
+            var attempt = 0
             var lastPct = -1
-            YoutubeDL.getInstance().execute(req, id) { p, etaSec, line ->
-                if (p >= 0f) item.progress = (p / 100f).coerceIn(0f, 1f)
-                item.eta = etaSec
-                var changed = false
-                when {
-                    line.contains("[Merger]") -> {
-                        item.stage = "Merging video & audio…"
-                        changed = true
+            while (true) {
+                val req = YoutubeDLRequest(item.url)
+                req.addOption("--no-playlist")
+                req.addOption("--no-mtime")
+                req.addOption("-o", "${tmp.absolutePath}/%(title).80s.%(ext)s")
+                if (attempt > 0) YtOptions.addFallback(req)
+
+                if (item.audio) {
+                    req.addOption("-x")
+                    req.addOption("--audio-format", "mp3")
+                    req.addOption("--audio-quality", "192K")
+                } else {
+                    // Prefer H.264 + AAC so the file plays everywhere
+                    val h = item.height
+                    val sort = if (h != null) {
+                        "res:$h,vcodec:h264,acodec:aac"
+                    } else {
+                        "vcodec:h264,acodec:aac"
                     }
-                    line.contains("[ExtractAudio]") -> {
-                        item.stage = "Converting to MP3…"
-                        changed = true
-                    }
-                    line.contains("[download]") && item.stage != "Downloading…" -> {
-                        item.stage = "Downloading…"
-                        changed = true
-                    }
-                    else -> {}
+                    req.addOption("-S", sort)
+                    req.addOption("--merge-output-format", "mp4")
                 }
-                val pct = (item.progress * 100).toInt()
-                if (pct != lastPct || changed) {
-                    lastPct = pct
-                    onNotify(pct, item.stage)
+
+                try {
+                    YoutubeDL.getInstance().execute(req, id) { p, etaSec, line ->
+                        if (p >= 0f) item.progress = (p / 100f).coerceIn(0f, 1f)
+                        item.eta = etaSec
+                        var changed = false
+                        when {
+                            line.contains("[Merger]") -> {
+                                item.stage = "Merging video & audio…"
+                                changed = true
+                            }
+                            line.contains("[ExtractAudio]") -> {
+                                item.stage = "Converting to MP3…"
+                                changed = true
+                            }
+                            line.contains("[download]") && item.stage != "Downloading…" -> {
+                                item.stage = "Downloading…"
+                                changed = true
+                            }
+                            else -> {}
+                        }
+                        val pct = (item.progress * 100).toInt()
+                        if (pct != lastPct || changed) {
+                            lastPct = pct
+                            onNotify(pct, item.stage)
+                        }
+                    }
+                    break
+                } catch (e: Throwable) {
+                    if (item.cancelled || attempt >= 1 || !YtOptions.shouldRetry(e)) throw e
+                    attempt++
+                    item.stage = "Retrying…"
+                    item.progress = 0f
+                    onNotify(0, item.stage)
+                    tmp.listFiles()?.forEach { it.delete() }
                 }
             }
 
@@ -286,7 +300,7 @@ object DownloadCenter {
         }
     }
 
-    private fun cleanError(e: Throwable): String {
+    fun cleanError(e: Throwable): String {
         val raw = e.message ?: "Unknown error"
         val line = raw.lines().lastOrNull { it.contains("ERROR") }
             ?: raw.lines().lastOrNull { it.isNotBlank() }
@@ -298,6 +312,15 @@ object DownloadCenter {
             msg.contains("Unable to resolve host", true) || msg.contains("Network", true) ->
                 "No internet connection."
             msg.contains("Private video", true) -> "This video is private."
+            msg.contains("429") || msg.contains("Too Many Requests", true) ->
+                "Too many requests (HTTP 429). Wait a few minutes and try again."
+            msg.contains("Unable to extract", true) || msg.contains("nsig", true) ->
+                "The site changed something. Tap Update engine, then try again."
+            msg.contains("Requested format is not available", true) ->
+                "This quality is not available for this video. Pick another quality."
+            msg.contains("Video unavailable", true) -> "This video is unavailable."
+            msg.contains("not made this video available in your country", true) ->
+                "This video is blocked in your country."
             msg.length > 220 -> msg.take(220) + "…"
             else -> msg
         }

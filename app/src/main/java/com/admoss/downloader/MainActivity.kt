@@ -556,6 +556,7 @@ private fun UpdateArea() {
 @Composable
 private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
     val p = LocalPalette.current
+    val context = LocalContext.current
     GlassCard {
         Text("Paste your link", color = p.text, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Spacer(Modifier.height(10.dp))
@@ -603,6 +604,18 @@ private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
                 color = Orange,
                 fontSize = 12.sp
             )
+            vm.infoErrorText?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, color = p.sub, fontSize = 12.sp)
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { vm.retryInfo() }) { Text("Try again", color = p.accent) }
+                TextButton(onClick = { Engine.updateNow(context) }, enabled = !Engine.updating) {
+                    Text(if (Engine.updating) "Updating…" else "Update engine", color = p.accent)
+                }
+            }
+            Engine.updateMessage?.let { Text(it, color = p.sub, fontSize = 12.sp) }
         }
     }
 }
