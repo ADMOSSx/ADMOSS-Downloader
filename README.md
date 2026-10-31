@@ -36,7 +36,8 @@
 | 🌗 | Modern UI with **dark and light themes** (switch with the sun/moon button) |
 | 🔎 | **Library tab** with search for your finished downloads |
 | 🗂️ | **Playlists section**: downloaded playlists are saved as folders with all videos in order, open one and tap **Play all** |
-| ▶️ | **Built-in player** that plays a playlist video after video |
+| ▶️ | **Built-in player** with **playback speed (0.5x to 2x)**, double-tap to skip 10 seconds, a seek bar and a **playlist menu** to jump to any video |
+| 🖼️ | **Cover images** for every download and playlist |
 | 🔄 | **In-app updates**: the app checks the latest GitHub release and installs the new version over the old one |
 | 📋 | One-tap **Paste**, automatic site detection |
 | 🔗 | **Share to ADMOSS Downloader** from the YouTube and TikTok apps |

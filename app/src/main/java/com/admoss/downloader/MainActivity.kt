@@ -1084,11 +1084,13 @@ private fun QueueRow(item: QueueItem) {
 
 // ---------- library tab ----------
 
-private fun playItems(context: Context, items: List<HistoryItem>, start: Int) {
+private fun playItems(context: Context, items: List<HistoryItem>, start: Int, name: String? = null) {
     if (items.isEmpty()) return
     val i = Intent(context, PlayerActivity::class.java)
         .putStringArrayListExtra(PlayerActivity.EXTRA_URIS, ArrayList(items.map { it.uri }))
         .putStringArrayListExtra(PlayerActivity.EXTRA_TITLES, ArrayList(items.map { it.title }))
+        .putStringArrayListExtra(PlayerActivity.EXTRA_THUMBS, ArrayList(items.map { it.thumb ?: "" }))
+        .putExtra(PlayerActivity.EXTRA_NAME, name)
         .putExtra(PlayerActivity.EXTRA_START, start)
     context.startActivity(i)
 }
@@ -1220,9 +1222,9 @@ private fun LibraryTab() {
                     val videos = (groups[groupName] ?: emptyList()).sortedBy { it.index }
                     PlaylistCard(
                         name = groupName,
-                        count = videos.size,
+                        videos = videos,
                         onOpen = { openName = groupName },
-                        onPlay = { playItems(context, videos, 0) }
+                        onPlay = { playItems(context, videos, 0, groupName) }
                     )
                 }
             }
@@ -1231,9 +1233,9 @@ private fun LibraryTab() {
 }
 
 @Composable
-private fun PlaylistCard(name: String, count: Int, onOpen: () -> Unit, onPlay: () -> Unit) {
+private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> Unit, onPlay: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(20.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1241,17 +1243,29 @@ private fun PlaylistCard(name: String, count: Int, onOpen: () -> Unit, onPlay: (
             .background(p.card)
             .border(1.dp, p.border, shape)
             .clickable { onOpen() }
-            .padding(14.dp),
+            .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             Modifier
-                .size(52.dp)
+                .width(128.dp)
+                .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(14.dp))
-                .background(Brand),
-            contentAlignment = Alignment.Center
         ) {
-            Ico(R.drawable.ic_playlist, Color.White, 28.dp)
+            Thumb(videos.firstOrNull()?.thumb, Modifier.fillMaxSize(), R.drawable.ic_playlist, 30.dp)
+            Row(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Ico(R.drawable.ic_playlist, Color.White, 13.dp)
+                Spacer(Modifier.width(4.dp))
+                Text("${videos.size}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -1263,21 +1277,31 @@ private fun PlaylistCard(name: String, count: Int, onOpen: () -> Unit, onPlay: (
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+            Spacer(Modifier.height(2.dp))
             Text(
-                if (count == 1) "1 video" else "$count videos",
+                if (videos.size == 1) "1 video" else "${videos.size} videos",
                 color = p.sub,
                 fontSize = 12.sp
             )
+            videos.firstOrNull()?.let {
+                Text(
+                    "Starts with: ${it.title}",
+                    color = p.sub,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         IconButton(onClick = onPlay) {
             Box(
                 Modifier
-                    .size(40.dp)
+                    .size(42.dp)
                     .clip(CircleShape)
-                    .background(p.accent.copy(alpha = 0.18f)),
+                    .background(Brand),
                 contentAlignment = Alignment.Center
             ) {
-                Ico(R.drawable.ic_play, p.accent, 22.dp, "Play all")
+                Ico(R.drawable.ic_play, Color.White, 24.dp, "Play all")
             }
         }
     }
@@ -1291,16 +1315,40 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Ico(R.drawable.ic_back, p.text, 24.dp, "Back") }
-                Column(Modifier.weight(1f)) {
+                Text("Playlist", color = p.sub, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        // Cover with title
+        item {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(22.dp))
+            ) {
+                Thumb(videos.firstOrNull()?.thumb, Modifier.fillMaxSize(), R.drawable.ic_playlist, 56.dp)
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(130.dp)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
+                )
+                Column(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(16.dp)
+                ) {
                     Text(
                         name,
-                        color = p.text,
+                        color = Color.White,
                         fontWeight = FontWeight.Black,
                         fontSize = 20.sp,
                         maxLines = 2,
@@ -1308,7 +1356,7 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                     )
                     Text(
                         if (videos.size == 1) "1 video" else "${videos.size} videos",
-                        color = p.sub,
+                        color = Color.White.copy(alpha = 0.75f),
                         fontSize = 13.sp
                     )
                 }
@@ -1317,25 +1365,48 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
 
         if (videos.isNotEmpty()) {
             item {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Brand)
-                        .clickable { playItems(context, videos, 0) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Ico(R.drawable.ic_play, Color.White, 24.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "PLAY ALL",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 2.sp,
-                            fontSize = 15.sp
-                        )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Brand)
+                            .clickable { playItems(context, videos, 0, name) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Ico(R.drawable.ic_play, Color.White, 22.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "PLAY ALL",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.5.dp, p.accent, RoundedCornerShape(16.dp))
+                            .clickable { playItems(context, videos.shuffled(), 0, name) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Ico(R.drawable.ic_shuffle, p.accent, 22.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "SHUFFLE",
+                                color = p.accent,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
                 }
             }
@@ -1349,7 +1420,7 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
             PlaylistVideoRow(
                 number = i + 1,
                 item = v,
-                onPlay = { playItems(context, videos, i) },
+                onPlay = { playItems(context, videos, i, name) },
                 onRemove = { DownloadCenter.removeHistory(context, v) }
             )
         }
@@ -1376,17 +1447,31 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
             .background(p.card)
             .border(1.dp, p.border, shape)
             .clickable { onPlay() }
-            .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            .padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(p.accent.copy(alpha = 0.16f)),
-            contentAlignment = Alignment.Center
+                .width(112.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
         ) {
-            Text("$number", color = p.accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Thumb(
+                item.thumb,
+                Modifier.fillMaxSize(),
+                if (item.audio) R.drawable.ic_music else R.drawable.ic_play,
+                24.dp
+            )
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(5.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+                Text("$number", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            }
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -1394,6 +1479,7 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
                 item.title,
                 color = p.text,
                 fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -1402,9 +1488,6 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
                 color = p.sub,
                 fontSize = 11.sp
             )
-        }
-        IconButton(onClick = onPlay) {
-            Ico(R.drawable.ic_play, p.accent, 24.dp, "Play")
         }
         IconButton(onClick = onRemove) {
             Ico(R.drawable.ic_delete, p.sub, 20.dp, "Remove from list")
@@ -1423,24 +1506,25 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
             .background(p.card)
             .border(1.dp, p.border, shape)
             .clickable { onOpen() }
-            .padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            .padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        Thumb(
+            item.thumb,
             Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(Brand),
-            contentAlignment = Alignment.Center
-        ) {
-            Ico(if (item.audio) R.drawable.ic_music else R.drawable.ic_play, Color.White, 22.dp)
-        }
+                .width(96.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp)),
+            if (item.audio) R.drawable.ic_music else R.drawable.ic_play,
+            24.dp
+        )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 item.title,
                 color = p.text,
                 fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )

@@ -204,14 +204,28 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- downloading ----------
 
-    private fun newItem(url: String, title: String, playlist: String? = null, index: Int = 0): QueueItem = QueueItem(
+    /** YouTube covers can be built from the video id. */
+    private fun youtubeThumb(url: String): String? {
+        val id = Regex("(?:v=|youtu\\.be/|shorts/)([A-Za-z0-9_-]{11})").find(url)?.groupValues?.get(1)
+            ?: return null
+        return "https://i.ytimg.com/vi/$id/mqdefault.jpg"
+    }
+
+    private fun newItem(
+        url: String,
+        title: String,
+        playlist: String? = null,
+        index: Int = 0,
+        thumbUrl: String? = null
+    ): QueueItem = QueueItem(
         id = DownloadCenter.newId(),
         url = url,
         title = title,
         audio = audioOnly,
         height = if (audioOnly) null else quality.height,
         playlist = playlist,
-        index = index
+        index = index,
+        thumbUrl = thumbUrl
     )
 
     /** Adds the current link (or the selected playlist videos) to the queue and starts the service. */
@@ -230,10 +244,10 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 message = "Select at least one video"
                 return
             }
-            chosen.map { newItem(it.value.url, it.value.title, pl.title, it.index) }
+            chosen.map { newItem(it.value.url, it.value.title, pl.title, it.index, youtubeThumb(it.value.url)) }
         } else {
             val title = info?.title ?: url.removePrefix("https://").removePrefix("http://").take(40)
-            listOf(newItem(url, title))
+            listOf(newItem(url, title, null, 0, youtubeThumb(url) ?: info?.thumbnailUrl))
         }
 
         DownloadCenter.enqueue(items)

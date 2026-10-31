@@ -14,13 +14,16 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 data class HistoryItem(
     val title: String,
     val uri: String,
     val audio: Boolean,
     val playlist: String? = null,
-    val index: Int = 0
+    val index: Int = 0,
+    val thumb: String? = null
 )
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
@@ -33,7 +36,8 @@ class QueueItem(
     val audio: Boolean,
     val height: Int?,
     val playlist: String? = null,
-    val index: Int = 0
+    val index: Int = 0,
+    val thumbUrl: String? = null
 ) {
     var status by mutableStateOf(Status.WAITING)
     var progress by mutableStateOf(0f) // 0..1
@@ -123,11 +127,13 @@ object DownloadCenter {
     }
 
     fun removePlaylist(ctx: Context, name: String) {
+        history.filter { it.playlist == name }.forEach { deleteThumb(it) }
         history = history.filter { it.playlist != name }
         saveHistory(ctx)
     }
 
     fun removeHistory(ctx: Context, item: HistoryItem) {
+        deleteThumb(item)
         history = history.filter { it.uri != item.uri }
         saveHistory(ctx)
     }
@@ -224,7 +230,11 @@ object DownloadCenter {
 
             val uri = saveToMediaStore(ctx, out, item.audio)
 
-            val saved = HistoryItem(out.nameWithoutExtension, uri.toString(), item.audio, item.playlist, item.index)
+            val thumbPath = saveThumb(ctx, item.thumbUrl, item.id)
+            val saved = HistoryItem(
+                out.nameWithoutExtension, uri.toString(), item.audio,
+                item.playlist, item.index, thumbPath
+            )
             history = (listOf(saved) + history).take(100)
             saveHistory(ctx)
 
@@ -250,6 +260,31 @@ object DownloadCenter {
     }
 
     // ---- helpers ----
+
+    private fun deleteThumb(item: HistoryItem) {
+        try {
+            item.thumb?.let { File(it).delete() }
+        } catch (e: Throwable) {
+            // ignore
+        }
+    }
+
+    /** Saves a small cover image next to the app data. Best effort, never fails the download. */
+    private fun saveThumb(ctx: Context, url: String?, id: Long): String? {
+        if (url.isNullOrBlank()) return null
+        return try {
+            val dir = File(ctx.filesDir, "thumbs").apply { mkdirs() }
+            val file = File(dir, "t${System.currentTimeMillis()}_$id.img")
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            c.setRequestProperty("User-Agent", "Mozilla/5.0")
+            c.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
+            if (file.length() > 0) file.absolutePath else null
+        } catch (e: Throwable) {
+            null
+        }
+    }
 
     private fun cleanError(e: Throwable): String {
         val raw = e.message ?: "Unknown error"
@@ -307,7 +342,8 @@ object DownloadCenter {
             val o = arr.getJSONObject(it)
             HistoryItem(
                 o.getString("t"), o.getString("u"), o.getBoolean("a"),
-                o.optString("p", "").ifBlank { null }, o.optInt("i", 0)
+                o.optString("p", "").ifBlank { null }, o.optInt("i", 0),
+                o.optString("th", "").ifBlank { null }
             )
         }
     } catch (e: Throwable) {
@@ -319,7 +355,7 @@ object DownloadCenter {
         history.forEach {
             arr.put(
                 JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
-                    .put("p", it.playlist ?: "").put("i", it.index)
+                    .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "")
             )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)
