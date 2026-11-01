@@ -165,3 +165,20 @@ object PlaylistParser {
         )
     }
 }
+
+/** Estimated download size of a video for the chosen mode and quality (0 = unknown). */
+fun estimateSize(info: VideoInfoUi, audioOnly: Boolean, quality: Quality): Long {
+    if (audioOnly) return info.audioSize
+    val exact = info.sizes[quality] ?: 0L
+    if (exact > 0L) return exact
+
+    // That quality does not exist for this video: use the best one that is not higher than asked
+    val limit = quality.height
+    val lower = info.sizes.entries
+        .filter { e ->
+            val h = e.key.height
+            h != null && limit != null && h <= limit && e.value > 0L
+        }
+        .maxByOrNull { it.key.height ?: 0 }
+    return lower?.value ?: (info.sizes[Quality.BEST] ?: 0L)
+}

@@ -373,7 +373,7 @@ private fun DownloadTab(vm: DownloadViewModel) {
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 110.dp),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item { Header() }
@@ -394,7 +394,7 @@ private fun DownloadTab(vm: DownloadViewModel) {
             if (pl != null) {
                 item { PlaylistHeader(vm, pl) }
                 itemsIndexed(pl.entries) { _, entry ->
-                    PlaylistRow(entry, vm.selectedUrls.contains(entry.url)) { vm.toggleSelected(entry.url) }
+                    PlaylistRow(entry, vm.selectedUrls.contains(entry.url), vm.sizeOf(entry.url)) { vm.toggleSelected(entry.url) }
                 }
             }
 
@@ -724,6 +724,10 @@ private fun InfoCard(vm: DownloadViewModel) {
 @Composable
 private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
     val p = LocalPalette.current
+    val selected = vm.selectedUrls.size
+    val checked = vm.checkedCount
+    val bytes = vm.selectedSize
+
     GlassCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -755,17 +759,79 @@ private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Pill("${vm.selectedUrls.size} selected", p.accent)
+            Pill("$selected selected", p.accent)
             Row {
                 TextButton(onClick = { vm.selectAll(true) }) { Text("Select all", color = p.accent) }
                 TextButton(onClick = { vm.selectAll(false) }) { Text("None", color = p.sub) }
             }
         }
+
+        // Total size of the selected videos
+        Spacer(Modifier.height(4.dp))
+        if (vm.sizeRunning) {
+            LinearProgressIndicator(
+                progress = { if (vm.sizeTotal > 0) vm.sizeChecked / vm.sizeTotal.toFloat() else 0f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(50)),
+                color = Violet,
+                trackColor = p.border
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Calculating size…  ${vm.sizeChecked} / ${vm.sizeTotal}",
+                    color = p.sub,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { vm.cancelSizeCalc() }) { Text("Stop", color = Pink) }
+            }
+        } else {
+            if (checked > 0) {
+                val complete = checked >= selected
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val label = if (bytes > 0) "≈ ${formatSize(bytes)}${if (complete) "" else "+"}" else "Size unknown"
+                    Pill(label, p.accent)
+                    Text(
+                        if (complete) "total for $selected videos" else "so far, $checked of $selected checked",
+                        color = p.sub,
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            if (selected > checked) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(1.5.dp, p.accent, RoundedCornerShape(14.dp))
+                        .clickable { vm.calculatePlaylistSize() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (checked == 0) "Calculate total size" else "Check the remaining ${selected - checked}",
+                        color = p.accent,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        }
+        vm.sizeNote?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, color = Orange, fontSize = 12.sp)
+        }
     }
 }
 
 @Composable
-private fun PlaylistRow(entry: PlaylistEntry, checked: Boolean, onToggle: () -> Unit) {
+private fun PlaylistRow(entry: PlaylistEntry, checked: Boolean, sizeBytes: Long, onToggle: () -> Unit) {
     val p = LocalPalette.current
     val shape = RoundedCornerShape(14.dp)
     Row(
@@ -796,13 +862,16 @@ private fun PlaylistRow(entry: PlaylistEntry, checked: Boolean, onToggle: () -> 
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        if (entry.durationSec > 0) {
-            Text(
-                formatDuration(entry.durationSec),
-                color = p.sub,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 10.dp)
-            )
+        Column(
+            Modifier.padding(horizontal = 10.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            if (entry.durationSec > 0) {
+                Text(formatDuration(entry.durationSec), color = p.sub, fontSize = 12.sp)
+            }
+            if (sizeBytes > 0) {
+                Text(formatSize(sizeBytes), color = p.accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -905,11 +974,20 @@ private fun DownloadButton(vm: DownloadViewModel) {
         else -> "DOWNLOAD"
     }
     val off = if (p.dark) Color(0xFF2A3045) else Color(0xFFCDD3E6)
+    val sub: String? = if (pl != null) {
+        val total = vm.selectedSize
+        if (vm.checkedCount > 0 && total > 0) "≈ ${formatSize(total)}${if (vm.checkedCount < selectedCount) "+" else ""}" else null
+    } else {
+        vm.info?.let { i ->
+            val b = estimateSize(i, vm.audioOnly, vm.quality)
+            if (b > 0) "≈ ${formatSize(b)}" else null
+        }
+    }
 
     Box(
         Modifier
             .fillMaxWidth()
-            .height(58.dp)
+            .height(62.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(
                 if (enabled) Brand else Brush.horizontalGradient(listOf(off, off))
@@ -934,13 +1012,18 @@ private fun DownloadButton(vm: DownloadViewModel) {
             } else {
                 Ico(R.drawable.ic_download, Color.White, 24.dp)
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    label,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp,
-                    fontSize = 15.sp
-                )
+                Column {
+                    Text(
+                        label,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                        fontSize = 15.sp
+                    )
+                    if (sub != null) {
+                        Text(sub, color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp)
+                    }
+                }
             }
         }
     }
@@ -1103,9 +1186,36 @@ private fun playItems(context: Context, items: List<HistoryItem>, start: Int, na
         .putStringArrayListExtra(PlayerActivity.EXTRA_URIS, ArrayList(items.map { it.uri }))
         .putStringArrayListExtra(PlayerActivity.EXTRA_TITLES, ArrayList(items.map { it.title }))
         .putStringArrayListExtra(PlayerActivity.EXTRA_THUMBS, ArrayList(items.map { it.thumb ?: "" }))
+        .putExtra(PlayerActivity.EXTRA_AUDIO, items.map { it.audio }.toBooleanArray())
+        .putExtra(PlayerActivity.EXTRA_SIZES, items.map { it.size }.toLongArray())
         .putExtra(PlayerActivity.EXTRA_NAME, name)
         .putExtra(PlayerActivity.EXTRA_START, start)
     context.startActivity(i)
+}
+
+/** Total size of some downloads. A "+" means some older files have no size saved. */
+private fun totalSizeText(items: List<HistoryItem>): String {
+    val total = items.sumOf { it.size }
+    if (total <= 0L) return "-"
+    val partial = items.any { it.size <= 0L }
+    return formatSize(total) + if (partial) "+" else ""
+}
+
+@Composable
+private fun StatCard(value: String, label: String, modifier: Modifier = Modifier) {
+    val p = LocalPalette.current
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier
+            .clip(shape)
+            .background(p.card)
+            .border(1.dp, p.border, shape)
+            .padding(vertical = 12.dp, horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(value, color = p.text, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1)
+        Text(label, color = p.sub, fontSize = 11.sp)
+    }
 }
 
 @Composable
@@ -1133,13 +1243,14 @@ private fun LibraryTab() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Column {
-                    Text("Library", color = p.text, fontWeight = FontWeight.Black, fontSize = 24.sp)
-                    Text(
-                        if (mode == 0) "${all.size} downloads" else "${groups.size} playlists",
-                        color = p.sub,
-                        fontSize = 13.sp
-                    )
+                Text("Library", color = p.text, fontWeight = FontWeight.Black, fontSize = 24.sp)
+            }
+
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard("${all.size}", "Downloads", Modifier.weight(1f))
+                    StatCard("${groups.size}", "Playlists", Modifier.weight(1f))
+                    StatCard(totalSizeText(all), "Storage used", Modifier.weight(1f))
                 }
             }
 
@@ -1291,8 +1402,10 @@ private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> 
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(2.dp))
+            val sizeText = totalSizeText(videos)
+            val countText = if (videos.size == 1) "1 video" else "${videos.size} videos"
             Text(
-                if (videos.size == 1) "1 video" else "${videos.size} videos",
+                if (sizeText != "-") "$countText  •  $sizeText" else countText,
                 color = p.sub,
                 fontSize = 12.sp
             )
@@ -1354,25 +1467,30 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                         .height(130.dp)
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                 )
-                Column(
-                    Modifier
+                Text(
+                    name,
+                    color = Color.White,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 20.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(16.dp)
-                ) {
-                    Text(
-                        name,
-                        color = Color.White,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 20.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        if (videos.size == 1) "1 video" else "${videos.size} videos",
-                        color = Color.White.copy(alpha = 0.75f),
-                        fontSize = 13.sp
-                    )
-                }
+                )
+            }
+        }
+
+        // Quick facts: number of videos and total size
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatCard(
+                    if (videos.size == 1) "1" else "${videos.size}",
+                    if (videos.size == 1) "Video" else "Videos",
+                    Modifier.weight(1f)
+                )
+                StatCard(totalSizeText(videos), "Total size", Modifier.weight(1f))
+                StatCard("${videos.count { it.audio }}", "Audio files", Modifier.weight(1f))
             }
         }
 
@@ -1496,8 +1614,9 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+            val kind = if (item.audio) "Audio" else "Video"
             Text(
-                if (item.audio) "Audio" else "Video",
+                if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
                 color = p.sub,
                 fontSize = 11.sp
             )
@@ -1541,8 +1660,9 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+            val kind = if (item.audio) "Audio" else "Video"
             Text(
-                if (item.audio) "Audio  •  Music/ADMOSS" else "Video  •  Movies/ADMOSS",
+                if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
                 color = p.sub,
                 fontSize = 11.sp
             )

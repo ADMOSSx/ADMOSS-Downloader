@@ -23,7 +23,8 @@ data class HistoryItem(
     val audio: Boolean,
     val playlist: String? = null,
     val index: Int = 0,
-    val thumb: String? = null
+    val thumb: String? = null,
+    val size: Long = 0L
 )
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
@@ -247,7 +248,7 @@ object DownloadCenter {
             val thumbPath = saveThumb(ctx, item.thumbUrl, item.id)
             val saved = HistoryItem(
                 out.nameWithoutExtension, uri.toString(), item.audio,
-                item.playlist, item.index, thumbPath
+                item.playlist, item.index, thumbPath, out.length()
             )
             history = (listOf(saved) + history).take(100)
             saveHistory(ctx)
@@ -366,7 +367,8 @@ object DownloadCenter {
             HistoryItem(
                 o.getString("t"), o.getString("u"), o.getBoolean("a"),
                 o.optString("p", "").ifBlank { null }, o.optInt("i", 0),
-                o.optString("th", "").ifBlank { null }
+                o.optString("th", "").ifBlank { null },
+                o.optLong("sz", 0L)
             )
         }
     } catch (e: Throwable) {
@@ -378,7 +380,7 @@ object DownloadCenter {
         history.forEach {
             arr.put(
                 JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
-                    .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "")
+                    .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "").put("sz", it.size)
             )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)

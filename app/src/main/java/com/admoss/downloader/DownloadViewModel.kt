@@ -43,6 +43,17 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     var selectedUrls by mutableStateOf<Set<String>>(emptySet())
     var playlistHint by mutableStateOf(false) // single video link that also belongs to a playlist
 
+    // ---- playlist size calculation ----
+    var playlistInfos by mutableStateOf<Map<String, VideoInfoUi>>(emptyMap())
+    var sizeRunning by mutableStateOf(false)
+    var sizeChecked by mutableStateOf(0)
+    var sizeTotal by mutableStateOf(0)
+    var sizeNote by mutableStateOf<String?>(null)
+
+    @Volatile
+    private var sizeCancelled = false
+    private var sizePid: String? = null
+
     private var infoSeq = 0
     private var infoPid: String? = null
 
@@ -92,6 +103,11 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         playlist = null
         playlistHint = false
         selectedUrls = emptySet()
+        cancelSizeCalc()
+        playlistInfos = emptyMap()
+        sizeChecked = 0
+        sizeTotal = 0
+        sizeNote = null
 
         val url = link.trim()
         if (!url.startsWith("http")) {
@@ -199,6 +215,79 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } finally {
                 if (seq == infoSeq) infoLoading = false
+            }
+        }
+    }
+
+    val checkedCount: Int
+        get() = selectedUrls.count { playlistInfos.containsKey(it) }
+
+    val selectedSize: Long
+        get() = selectedUrls.sumOf { u -> playlistInfos[u]?.let { estimateSize(it, audioOnly, quality) } ?: 0L }
+
+    fun sizeOf(url: String): Long =
+        playlistInfos[url]?.let { estimateSize(it, audioOnly, quality) } ?: 0L
+
+    /** Looks up every selected video one by one and adds up the estimated sizes. */
+    fun calculatePlaylistSize() {
+        val pl = playlist ?: return
+        if (sizeRunning || !Engine.ready) return
+        val urls = pl.entries.map { it.url }.filter { it in selectedUrls && !playlistInfos.containsKey(it) }
+        if (urls.isEmpty()) return
+
+        sizeCancelled = false
+        sizeRunning = true
+        sizeChecked = 0
+        sizeTotal = urls.size
+        sizeNote = null
+        val seq = infoSeq
+
+        viewModelScope.launch(Dispatchers.IO) {
+            var failures = 0
+            try {
+                for (url in urls) {
+                    if (sizeCancelled || seq != infoSeq) break
+                    try {
+                        val pid = "size-${System.nanoTime()}"
+                        sizePid = pid
+                        val raw = try {
+                            runJson(url, pid, false, false)
+                        } catch (e: Throwable) {
+                            if (sizeCancelled || !YtOptions.shouldRetry(e)) throw e
+                            val pid2 = "$pid-b"
+                            sizePid = pid2
+                            runJson(url, pid2, false, true)
+                        }
+                        val parsed = InfoParser.parse(raw)
+                        if (!sizeCancelled && seq == infoSeq) playlistInfos = playlistInfos + (url to parsed)
+                        failures = 0
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        if (sizeCancelled) break
+                        failures += 1
+                        if (failures >= 5) {
+                            sizeNote = "Stopped after 5 errors in a row. Try again later."
+                            break
+                        }
+                    }
+                    sizeChecked += 1
+                    delay(250)
+                }
+            } finally {
+                sizeRunning = false
+                sizePid = null
+            }
+        }
+    }
+
+    fun cancelSizeCalc() {
+        sizeCancelled = true
+        sizePid?.let {
+            try {
+                YoutubeDL.getInstance().destroyProcessById(it)
+            } catch (e: Throwable) {
+                // ignore
             }
         }
     }
