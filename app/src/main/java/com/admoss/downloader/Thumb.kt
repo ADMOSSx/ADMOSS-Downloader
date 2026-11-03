@@ -47,7 +47,7 @@ fun Thumb(
     }
 
     Box(
-        modifier.background(Brush.horizontalGradient(listOf(Color(0xFF00B8D4), Color(0xFF7C4DFF)))),
+        modifier.background(Color(0xFF3A342D)),
         contentAlignment = Alignment.Center
     ) {
         val b = bmp
@@ -62,7 +62,7 @@ fun Thumb(
             Icon(
                 painter = painterResource(fallback),
                 contentDescription = null,
-                tint = Color.White,
+                tint = Color(0xFFD9D2C6),
                 modifier = Modifier.size(iconSize)
             )
         }

@@ -83,9 +83,9 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private val Accent = Color(0xFF00E5FF)
-private val Violet = Color(0xFF7C4DFF)
-private val Panel = Color(0xF2141A2E)
+private val Accent = Color(0xFFF08A4B)
+private val OnAccent = Color(0xFF1C1007)
+private val Panel = Color(0xF21C1916)
 private val Speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 /**
@@ -124,7 +124,7 @@ class PlayerActivity : ComponentActivity() {
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Accent, secondary = Violet)) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = OnAccent)) {
                 PlayerScreen(
                     uris = uriList,
                     titles = titles,
@@ -657,7 +657,7 @@ private fun PlayerScreen(
                         Modifier
                             .size(76.dp)
                             .clip(CircleShape)
-                            .background(Brush.horizontalGradient(listOf(Color(0xFF00B8D4), Violet)))
+                            .background(Accent)
                             .clickable { togglePlay() },
                         contentAlignment = Alignment.Center
                     ) {
@@ -667,7 +667,8 @@ private fun PlayerScreen(
                                 playing -> R.drawable.ic_pause
                                 else -> R.drawable.ic_play
                             },
-                            40.dp
+                            40.dp,
+                            OnAccent
                         )
                     }
                     if (multi) {

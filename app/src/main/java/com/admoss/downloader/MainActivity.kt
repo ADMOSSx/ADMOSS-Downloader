@@ -53,13 +53,10 @@ import java.util.Locale
 
 // ---------- colors & theme ----------
 
-private val Teal = Color(0xFF00B8D4)
-private val Violet = Color(0xFF7C4DFF)
-private val Pink = Color(0xFFFF4081)
-private val Green = Color(0xFF00C853)
-private val Red = Color(0xFFFF5252)
-private val Orange = Color(0xFFFFAB40)
-private val Brand = Brush.horizontalGradient(listOf(Teal, Violet))
+private val Pink = Color(0xFFE0524B)   // cancel / delete
+private val Green = Color(0xFF3E9B6B)  // done
+private val Red = Color(0xFFD64545)    // errors
+private val Orange = Color(0xFFD08A2E) // warnings
 
 class Palette(
     val dark: Boolean,
@@ -71,33 +68,36 @@ class Palette(
     val card: Color,
     val border: Color,
     val accent: Color,
+    val onAccent: Color,
     val nav: Color
 )
 
 private val DarkPalette = Palette(
     dark = true,
-    bgTop = Color(0xFF0B0F1A),
-    bgMid = Color(0xFF16102E),
-    bgBottom = Color(0xFF0B0F1A),
-    text = Color.White,
-    sub = Color.White.copy(alpha = 0.6f),
-    card = Color.White.copy(alpha = 0.06f),
-    border = Color.White.copy(alpha = 0.10f),
-    accent = Color(0xFF00E5FF),
-    nav = Color(0xFF10152A)
+    bgTop = Color(0xFF151311),
+    bgMid = Color(0xFF151311),
+    bgBottom = Color(0xFF151311),
+    text = Color(0xFFEFEAE2),
+    sub = Color(0xFFA59E92),
+    card = Color(0xFF1E1B18),
+    border = Color(0xFF2F2B26),
+    accent = Color(0xFFF08A4B),
+    onAccent = Color(0xFF1C1007),
+    nav = Color(0xFF1A1816)
 )
 
 private val LightPalette = Palette(
     dark = false,
-    bgTop = Color(0xFFF6F8FF),
-    bgMid = Color(0xFFEEE9FF),
-    bgBottom = Color(0xFFF6F8FF),
-    text = Color(0xFF12152B),
-    sub = Color(0xFF5B6280),
-    card = Color.White,
-    border = Color(0xFFE1E5F2),
-    accent = Color(0xFF0097A7),
-    nav = Color.White
+    bgTop = Color(0xFFF5F2EC),
+    bgMid = Color(0xFFF5F2EC),
+    bgBottom = Color(0xFFF5F2EC),
+    text = Color(0xFF1F1C18),
+    sub = Color(0xFF6C655B),
+    card = Color(0xFFFFFFFF),
+    border = Color(0xFFE3DDD2),
+    accent = Color(0xFFC2410C),
+    onAccent = Color(0xFFFFFFFF),
+    nav = Color(0xFFFBF9F5)
 )
 
 private val LocalPalette = staticCompositionLocalOf { DarkPalette }
@@ -171,9 +171,9 @@ fun AdmossRoot(getVm: () -> DownloadViewModel) {
     }
 
     val scheme = if (dark) {
-        darkColorScheme(primary = palette.accent, secondary = Violet, background = palette.bgTop, surface = Color(0xFF131A2B), onPrimary = Color.Black)
+        darkColorScheme(primary = palette.accent, onPrimary = palette.onAccent, background = palette.bgTop, surface = palette.card)
     } else {
-        lightColorScheme(primary = palette.accent, secondary = Violet, background = palette.bgTop, surface = Color.White, onPrimary = Color.White)
+        lightColorScheme(primary = palette.accent, onPrimary = palette.onAccent, background = palette.bgTop, surface = palette.card)
     }
 
     CompositionLocalProvider(LocalPalette provides palette) {
@@ -243,7 +243,7 @@ private fun Ico(@DrawableRes id: Int, tint: Color, size: Dp = 24.dp, desc: Strin
 @Composable
 private fun GlassCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -260,7 +260,7 @@ private fun GlassCard(modifier: Modifier = Modifier, content: @Composable Column
 private fun Pill(text: String, color: Color) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(RoundedCornerShape(8.dp))
             .background(color.copy(alpha = 0.16f))
             .padding(horizontal = 12.dp, vertical = 5.dp)
     ) {
@@ -291,7 +291,7 @@ private fun AdmossApp(vm: DownloadViewModel) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(p.bgTop, p.bgMid, p.bgBottom)))
+            .background(p.bgTop)
     ) {
         Box(
             Modifier
@@ -338,7 +338,7 @@ private fun NavItem(
     val color = if (selected) p.accent else p.sub
     Column(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable { onClick() }
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -433,25 +433,14 @@ private fun Header() {
     val p = LocalPalette.current
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(Brand),
-            contentAlignment = Alignment.Center
-        ) {
-            Ico(R.drawable.ic_download, Color.White, 28.dp)
-        }
-        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "ADMOSS",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = 4.sp,
+                "ADMOSS Downloader",
+                fontSize = 21.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = p.text
             )
-            Text("YouTube  •  TikTok  •  v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = p.sub)
+            Text("Version ${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = p.sub)
         }
         IconButton(onClick = { Updater.check(context, true) }) {
             Ico(R.drawable.ic_refresh, p.text, 22.dp, "Check for updates")
@@ -476,10 +465,10 @@ private fun UpdateArea() {
                     Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(Brand),
+                        .background(p.accent),
                     contentAlignment = Alignment.Center
                 ) {
-                    Ico(R.drawable.ic_download, Color.White, 24.dp)
+                    Ico(R.drawable.ic_download, p.onAccent, 24.dp)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -496,7 +485,7 @@ private fun UpdateArea() {
                         .fillMaxWidth()
                         .height(6.dp)
                         .clip(RoundedCornerShape(50)),
-                    color = Violet,
+                    color = p.accent,
                     trackColor = p.border
                 )
                 Spacer(Modifier.height(6.dp))
@@ -511,16 +500,15 @@ private fun UpdateArea() {
                         Modifier
                             .weight(1f)
                             .height(46.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Brand)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(p.accent)
                             .clickable { Updater.downloadAndInstall(context) },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            "UPDATE NOW",
-                            color = Color.White,
+                            "Update now",
+                            color = p.onAccent,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp,
                             fontSize = 14.sp
                         )
                     }
@@ -535,7 +523,7 @@ private fun UpdateArea() {
             }
         }
     } else if (msg != null) {
-        val shape = RoundedCornerShape(18.dp)
+        val shape = RoundedCornerShape(14.dp)
         Row(
             Modifier
                 .fillMaxWidth()
@@ -574,7 +562,7 @@ private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
                     IconButton(onClick = { vm.onLinkChange("") }) { Ico(R.drawable.ic_close, p.sub, 22.dp, "Clear") }
                 }
             },
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = p.accent,
                 unfocusedBorderColor = p.border,
@@ -592,7 +580,7 @@ private fun LinkCard(vm: DownloadViewModel, onPaste: () -> Unit) {
             val color = when (platform) {
                 "YouTube" -> Red
                 "TikTok" -> p.accent
-                else -> Violet
+                else -> p.sub
             }
             Pill("Detected: $platform", color)
         }
@@ -640,7 +628,7 @@ private fun InfoCard(vm: DownloadViewModel) {
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(p.border)
             ) {
                 vm.thumb?.let {
@@ -694,24 +682,24 @@ private fun InfoCard(vm: DownloadViewModel) {
             val bytes = if (vm.audioOnly) info.audioSize else (info.sizes[vm.quality] ?: 0L)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill(if (bytes > 0) "≈ ${formatSize(bytes)}" else "Size unknown", p.accent)
-                Pill(if (vm.audioOnly) "MP3 192 kbps" else vm.quality.label, Violet)
+                Pill(if (vm.audioOnly) "MP3 192 kbps" else vm.quality.label, p.sub)
             }
 
             if (vm.playlistHint) {
                 Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Violet.copy(alpha = 0.14f))
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(p.accent.copy(alpha = 0.12f))
                         .clickable { vm.loadPlaylistFromHint() }
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Ico(R.drawable.ic_playlist, Violet, 18.dp)
+                    Ico(R.drawable.ic_playlist, p.accent, 18.dp)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         "Part of a playlist. Tap to load all videos",
-                        color = Violet,
+                        color = p.accent,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -734,10 +722,10 @@ private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
                 Modifier
                     .size(44.dp)
                     .clip(CircleShape)
-                    .background(Brand),
+                    .background(p.accent),
                 contentAlignment = Alignment.Center
             ) {
-                Ico(R.drawable.ic_playlist, Color.White, 22.dp)
+                Ico(R.drawable.ic_playlist, p.onAccent, 22.dp)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -775,7 +763,7 @@ private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
                     .fillMaxWidth()
                     .height(6.dp)
                     .clip(RoundedCornerShape(50)),
-                color = Violet,
+                color = p.accent,
                 trackColor = p.border
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -809,8 +797,8 @@ private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
                     Modifier
                         .fillMaxWidth()
                         .height(44.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(1.5.dp, p.accent, RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.5.dp, p.accent, RoundedCornerShape(10.dp))
                         .clickable { vm.calculatePlaylistSize() },
                     contentAlignment = Alignment.Center
                 ) {
@@ -833,7 +821,7 @@ private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
 @Composable
 private fun PlaylistRow(entry: PlaylistEntry, checked: Boolean, sizeBytes: Long, onToggle: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(10.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -886,7 +874,7 @@ private fun OptionsCard(vm: DownloadViewModel) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(10.dp))
                 .background(p.border.copy(alpha = 0.5f))
                 .padding(4.dp)
         ) {
@@ -939,15 +927,12 @@ private fun FormatTab(
     onClick: () -> Unit
 ) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(11.dp)
-    val tint = if (selected) Color.White else p.sub
+    val shape = RoundedCornerShape(8.dp)
+    val tint = if (selected) p.onAccent else p.sub
     Box(
         modifier
             .clip(shape)
-            .background(
-                if (selected) Brand
-                else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
-            )
+            .background(if (selected) p.accent else Color.Transparent)
             .clickable { onClick() }
             .padding(vertical = 11.dp),
         contentAlignment = Alignment.Center
@@ -969,11 +954,12 @@ private fun DownloadButton(vm: DownloadViewModel) {
     val selectedCount = vm.selectedUrls.size
     val enabled = Engine.ready && vm.link.isNotBlank() && (pl == null || selectedCount > 0)
     val label = when {
-        pl != null -> if (selectedCount == 1) "DOWNLOAD 1 VIDEO" else "DOWNLOAD $selectedCount VIDEOS"
-        vm.audioOnly -> "DOWNLOAD MP3"
-        else -> "DOWNLOAD"
+        pl != null -> if (selectedCount == 1) "Download 1 video" else "Download $selectedCount videos"
+        vm.audioOnly -> "Download MP3"
+        else -> "Download"
     }
-    val off = if (p.dark) Color(0xFF2A3045) else Color(0xFFCDD3E6)
+    val off = if (p.dark) Color(0xFF2F2B26) else Color(0xFFD9D3C8)
+    val fg = if (enabled || Engine.failed) p.onAccent else p.sub
     val sub: String? = if (pl != null) {
         val total = vm.selectedSize
         if (vm.checkedCount > 0 && total > 0) "≈ ${formatSize(total)}${if (vm.checkedCount < selectedCount) "+" else ""}" else null
@@ -988,9 +974,9 @@ private fun DownloadButton(vm: DownloadViewModel) {
         Modifier
             .fillMaxWidth()
             .height(62.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
-                if (enabled) Brand else Brush.horizontalGradient(listOf(off, off))
+                if (enabled || Engine.failed) p.accent else off
             )
             .clickable(enabled = enabled || Engine.failed) {
                 focus.clearFocus()
@@ -1000,28 +986,27 @@ private fun DownloadButton(vm: DownloadViewModel) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (Engine.failed) {
-                Text(Engine.message, color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(Engine.message, color = fg, fontWeight = FontWeight.SemiBold)
             } else if (!Engine.ready) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
-                    color = Color.White
+                    color = fg
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(Engine.message, color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text(Engine.message, color = fg, fontWeight = FontWeight.SemiBold)
             } else {
-                Ico(R.drawable.ic_download, Color.White, 24.dp)
+                Ico(R.drawable.ic_download, fg, 24.dp)
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text(
                         label,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp,
-                        fontSize = 15.sp
+                        color = fg,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp
                     )
                     if (sub != null) {
-                        Text(sub, color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp)
+                        Text(sub, color = fg.copy(alpha = 0.85f), fontSize = 11.sp)
                     }
                 }
             }
@@ -1031,7 +1016,7 @@ private fun DownloadButton(vm: DownloadViewModel) {
 
 @Composable
 private fun MessageCard(message: String) {
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(14.dp)
     val p = LocalPalette.current
     Row(
         Modifier
@@ -1089,7 +1074,7 @@ private fun QueueRow(item: QueueItem) {
         animationSpec = tween(300),
         label = "queue-progress"
     )
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(14.dp)
     val status = item.status
 
     Column(
@@ -1165,7 +1150,7 @@ private fun QueueRow(item: QueueItem) {
                     .fillMaxWidth()
                     .height(6.dp)
                     .clip(RoundedCornerShape(50)),
-                color = Violet,
+                color = p.accent,
                 trackColor = p.border
             )
         }
@@ -1204,7 +1189,7 @@ private fun totalSizeText(items: List<HistoryItem>): String {
 @Composable
 private fun StatCard(value: String, label: String, modifier: Modifier = Modifier) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(14.dp)
     Column(
         modifier
             .clip(shape)
@@ -1213,7 +1198,7 @@ private fun StatCard(value: String, label: String, modifier: Modifier = Modifier
             .padding(vertical = 12.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(value, color = p.text, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1)
+        Text(value, color = p.text, fontWeight = FontWeight.Bold, fontSize = 17.sp, maxLines = 1)
         Text(label, color = p.sub, fontSize = 11.sp)
     }
 }
@@ -1243,7 +1228,7 @@ private fun LibraryTab() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Text("Library", color = p.text, fontWeight = FontWeight.Black, fontSize = 24.sp)
+                Text("Library", color = p.text, fontWeight = FontWeight.Bold, fontSize = 24.sp)
             }
 
             item {
@@ -1258,7 +1243,7 @@ private fun LibraryTab() {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(10.dp))
                         .background(p.border.copy(alpha = 0.5f))
                         .padding(4.dp)
                 ) {
@@ -1280,7 +1265,7 @@ private fun LibraryTab() {
                             IconButton(onClick = { query = "" }) { Ico(R.drawable.ic_close, p.sub, 20.dp, "Clear") }
                         }
                     },
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = p.accent,
                         unfocusedBorderColor = p.border,
@@ -1359,7 +1344,7 @@ private fun LibraryTab() {
 @Composable
 private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> Unit, onPlay: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(14.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1374,7 +1359,7 @@ private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> 
             Modifier
                 .width(128.dp)
                 .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(10.dp))
         ) {
             Thumb(videos.firstOrNull()?.thumb, Modifier.fillMaxSize(), R.drawable.ic_playlist, 30.dp)
             Row(
@@ -1424,10 +1409,10 @@ private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> 
                 Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(Brand),
+                    .background(p.accent),
                 contentAlignment = Alignment.Center
             ) {
-                Ico(R.drawable.ic_play, Color.White, 24.dp, "Play all")
+                Ico(R.drawable.ic_play, p.onAccent, 24.dp, "Play all")
             }
         }
     }
@@ -1457,7 +1442,7 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(16.dp))
             ) {
                 Thumb(videos.firstOrNull()?.thumb, Modifier.fillMaxSize(), R.drawable.ic_playlist, 56.dp)
                 Box(
@@ -1470,7 +1455,7 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                 Text(
                     name,
                     color = Color.White,
-                    fontWeight = FontWeight.Black,
+                    fontWeight = FontWeight.Bold,
                     fontSize = 20.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -1501,19 +1486,18 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                         Modifier
                             .weight(1f)
                             .height(50.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Brand)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(p.accent)
                             .clickable { playItems(context, videos, 0, name) },
                         contentAlignment = Alignment.Center
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Ico(R.drawable.ic_play, Color.White, 22.dp)
+                            Ico(R.drawable.ic_play, p.onAccent, 22.dp)
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                "PLAY ALL",
-                                color = Color.White,
+                                "Play all",
+                                color = p.onAccent,
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp,
                                 fontSize = 14.sp
                             )
                         }
@@ -1522,8 +1506,8 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                         Modifier
                             .weight(1f)
                             .height(50.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .border(1.5.dp, p.accent, RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.5.dp, p.accent, RoundedCornerShape(12.dp))
                             .clickable { playItems(context, videos.shuffled(), 0, name) },
                         contentAlignment = Alignment.Center
                     ) {
@@ -1531,10 +1515,9 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
                             Ico(R.drawable.ic_shuffle, p.accent, 22.dp)
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                "SHUFFLE",
+                                "Shuffle",
                                 color = p.accent,
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp,
                                 fontSize = 14.sp
                             )
                         }
@@ -1570,7 +1553,7 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit) {
 @Composable
 private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit, onRemove: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(12.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1585,7 +1568,7 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
             Modifier
                 .width(112.dp)
                 .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(10.dp))
         ) {
             Thumb(
                 item.thumb,
@@ -1630,7 +1613,7 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
 @Composable
 private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(12.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1646,7 +1629,7 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
             Modifier
                 .width(96.dp)
                 .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(12.dp)),
+                .clip(RoundedCornerShape(10.dp)),
             if (item.audio) R.drawable.ic_music else R.drawable.ic_play,
             24.dp
         )
@@ -1692,7 +1675,7 @@ private fun CrashScreen(report: String, onContinue: () -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color(0xFF0B0F1A))
+            .background(Color(0xFF151311))
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(20.dp)
@@ -1714,7 +1697,7 @@ private fun CrashScreen(report: String, onContinue: () -> Unit) {
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(10.dp))
                 .background(Color.White.copy(alpha = 0.06f))
                 .padding(12.dp)
         ) {
@@ -1730,7 +1713,7 @@ private fun CrashScreen(report: String, onContinue: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Copy") }
-            TextButton(onClick = onContinue) { Text("Continue", color = Color(0xFF00E5FF)) }
+            TextButton(onClick = onContinue) { Text("Continue", color = Color(0xFFF08A4B)) }
         }
     }
 }

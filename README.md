@@ -4,8 +4,8 @@
 
 <br>
 
-[![Latest release](https://img.shields.io/github/v/release/ADMOSSx/ADMOSS-Downloader?style=for-the-badge&color=7C4DFF&label=Latest)](https://github.com/ADMOSSx/ADMOSS-Downloader/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/ADMOSSx/ADMOSS-Downloader/total?style=for-the-badge&color=00B8D4&label=Downloads)](https://github.com/ADMOSSx/ADMOSS-Downloader/releases)
+[![Latest release](https://img.shields.io/github/v/release/ADMOSSx/ADMOSS-Downloader?style=for-the-badge&color=C2410C&label=Latest)](https://github.com/ADMOSSx/ADMOSS-Downloader/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ADMOSSx/ADMOSS-Downloader/total?style=for-the-badge&color=5B5348&label=Downloads)](https://github.com/ADMOSSx/ADMOSS-Downloader/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/ADMOSSx/ADMOSS-Downloader/build.yml?style=for-the-badge&label=Build)](https://github.com/ADMOSSx/ADMOSS-Downloader/actions)
 ![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)
