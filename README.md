@@ -48,13 +48,12 @@
 | 🎵 | **MP3 audio** mode |
 | 📚 | **Download queue**: paste many links, they download one after another |
 | 📃 | **Playlist support**: load a whole playlist and pick the videos you want |
-| 🧮 | **Playlist size calculator**: see the total download size of the selected videos, and the size of every video, before you download |
 | 🗂️ | **Playlists section** in the Library: each playlist is a folder with all its videos in order |
-| ▶️ | **Built-in player** with speed control (0.5x to 2x), double-tap to skip 10 seconds, **brightness and volume swipes**, **resume where you stopped**, repeat modes, zoom to fill and a **playlist menu** to jump to any video |
+| ▶️ | **Built-in player** with speed control (0.5x to 2x), double-tap to skip 10 seconds, a seek bar and a **playlist menu** to jump to any video |
 | 🔀 | **PLAY ALL** and **SHUFFLE** for playlists |
 | 🖼️ | **Cover images** for every download and playlist |
 | 🔔 | **Background downloads** with a notification (progress, cancel) |
-| 🔎 | **Library** with search and storage stats (downloads, playlists, space used, size of each playlist) |
+| 🔎 | **Library search** |
 | 🌗 | **Dark and light** themes |
 | 🔄 | **In-app updates**: new versions install over the old one |
 | 🛡️ | Automatic **second try** with different network settings when YouTube blocks the first one |
