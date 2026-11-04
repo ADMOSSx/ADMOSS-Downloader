@@ -18,7 +18,9 @@ data class VideoInfoUi(
     /** Estimated download size in bytes for each quality that is really available (0 = unknown). */
     val sizes: Map<Quality, Long>,
     /** Estimated size of the MP3 (192 kbps) in bytes. */
-    val audioSize: Long
+    val audioSize: Long,
+    /** False when yt-dlp found only audio (a TikTok photo post looks like this). */
+    val hasVideo: Boolean = true
 )
 
 /** Turns the JSON printed by `yt-dlp --dump-single-json` into something the UI can show. */
@@ -102,7 +104,8 @@ object InfoParser {
             durationSec = duration,
             thumbnailUrl = clean(o.optString("thumbnail", "")).ifBlank { null },
             sizes = sizes,
-            audioSize = if (duration > 0) duration * 24000L else 0L // 192 kbps = 24000 bytes/s
+            audioSize = if (duration > 0) duration * 24000L else 0L, // 192 kbps = 24000 bytes/s
+            hasVideo = videos.isNotEmpty()
         )
     }
 

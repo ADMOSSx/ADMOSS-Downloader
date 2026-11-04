@@ -24,7 +24,10 @@ data class HistoryItem(
     val playlist: String? = null,
     val index: Int = 0,
     val thumb: String? = null,
-    val size: Long = 0L
+    val size: Long = 0L,
+    /** Saved pictures of a TikTok photo post (empty for videos). */
+    val photoUris: List<String> = emptyList(),
+    val musicUri: String? = null
 )
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
@@ -38,7 +41,10 @@ class QueueItem(
     val height: Int?,
     val playlist: String? = null,
     val index: Int = 0,
-    val thumbUrl: String? = null
+    val thumbUrl: String? = null,
+    val photo: PhotoPost? = null,
+    val photoImages: Boolean = true,
+    val photoMusic: Boolean = true
 ) {
     var status by mutableStateOf(Status.WAITING)
     var progress by mutableStateOf(0f) // 0..1
@@ -151,6 +157,9 @@ object DownloadCenter {
         item.stage = "Starting…"
         item.progress = 0f
         item.eta = -1L
+
+        val photoPost = item.photo
+        if (photoPost != null) return runPhotoItem(ctx, item, photoPost, onNotify)
 
         val tmp = File(ctx.cacheDir, "dl/$id").apply { mkdirs() }
         var result: HistoryItem? = null
@@ -274,6 +283,148 @@ object DownloadCenter {
         return result
     }
 
+    // ---- TikTok photo posts ----
+
+    private fun safeName(text: String, max: Int): String =
+        text.replace(Regex("[\\\\/:*?\"<>|\\r\\n#]"), " ").replace(Regex("\\s+"), " ").trim().take(max).trim()
+
+    /** Downloads one file. The extension comes from the server (jpg, webp, mp3 ...). */
+    private fun downloadFile(url: String, base: File, defaultExt: String): File {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 15000
+        c.readTimeout = 30000
+        c.instanceFollowRedirects = true
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36")
+        c.setRequestProperty("Referer", "https://www.tiktok.com/")
+        if (c.responseCode !in 200..299) throw Exception("HTTP ${c.responseCode} while downloading a file")
+
+        val type = (c.contentType ?: "").lowercase()
+        val fromUrl = url.substringBefore('?').substringAfterLast('.', "").lowercase()
+        val ext = when {
+            "webp" in type -> "webp"
+            "png" in type -> "png"
+            "heic" in type -> "heic"
+            "jpeg" in type || "jpg" in type -> "jpg"
+            "audio/mp4" in type || "m4a" in type -> "m4a"
+            "mpeg" in type || "mp3" in type -> "mp3"
+            "aac" in type -> "aac"
+            fromUrl in listOf("jpg", "jpeg", "png", "webp", "mp3", "m4a", "aac") -> fromUrl.replace("jpeg", "jpg")
+            else -> defaultExt
+        }
+        val out = File(base.parentFile, base.name + "." + ext)
+        c.inputStream.use { input -> out.outputStream().use { input.copyTo(it) } }
+        return out
+    }
+
+    private fun saveImage(ctx: Context, file: File, folder: String): Uri {
+        val resolver = ctx.contentResolver
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "image/jpeg"
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/ADMOSS/$folder")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
+            ?: throw Exception("Could not create the picture file")
+        resolver.openOutputStream(uri)?.use { output ->
+            file.inputStream().use { it.copyTo(output) }
+        } ?: throw Exception("Could not write the picture")
+        values.clear()
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return uri
+    }
+
+    /** Saves the pictures to Pictures/ADMOSS/<post> and the music to Music/ADMOSS. */
+    private fun runPhotoItem(ctx: Context, item: QueueItem, post: PhotoPost, onNotify: (Int, String) -> Unit): HistoryItem? {
+        val tmp = File(ctx.cacheDir, "dl/photo-${item.id}").apply { mkdirs() }
+        var result: HistoryItem? = null
+        try {
+            val images = if (item.photoImages) post.images else emptyList()
+            val music = if (item.photoMusic) post.musicUrl else null
+            val total = images.size + (if (music != null) 1 else 0)
+            if (total == 0) throw Exception("Nothing to download")
+
+            val label = safeName(post.title, 40).ifBlank { "TikTok photos" }
+            val folder = (label + " " + post.id.takeLast(5)).trim()
+            val imageUris = ArrayList<String>()
+            var bytes = 0L
+            var done = 0
+
+            for ((i, url) in images.withIndex()) {
+                if (item.cancelled) {
+                    item.status = Status.CANCELLED
+                    item.stage = "Cancelled"
+                    return null
+                }
+                item.stage = "Photo ${i + 1} of ${images.size}"
+                onNotify(done * 100 / total, item.stage)
+                val file = downloadFile(url, File(tmp, "photo_" + (i + 1).toString().padStart(2, '0')), "jpg")
+                imageUris.add(saveImage(ctx, file, folder).toString())
+                bytes += file.length()
+                done += 1
+                item.progress = done / total.toFloat()
+            }
+
+            var musicUri: String? = null
+            if (music != null) {
+                if (item.cancelled) {
+                    item.status = Status.CANCELLED
+                    item.stage = "Cancelled"
+                    return null
+                }
+                item.stage = "Music"
+                onNotify(done * 100 / total, item.stage)
+                val musicName = safeName(post.musicTitle.ifBlank { label }, 50).ifBlank { "TikTok music" }
+                val file = downloadFile(music, File(tmp, "$musicName - TikTok"), "mp3")
+                musicUri = saveToMediaStore(ctx, file, true).toString()
+                bytes += file.length()
+                done += 1
+                item.progress = done / total.toFloat()
+            }
+
+            val coverUrl = images.firstOrNull() ?: post.images.firstOrNull()
+            val thumbPath = saveThumb(ctx, coverUrl, item.id)
+            val title = post.title.ifBlank { "TikTok photos" + if (post.author.isNotBlank()) " by @${post.author}" else "" }.take(90)
+
+            val saved = HistoryItem(
+                title = title,
+                uri = imageUris.firstOrNull() ?: musicUri ?: "",
+                audio = imageUris.isEmpty(),
+                playlist = null,
+                index = 0,
+                thumb = thumbPath,
+                size = bytes,
+                photoUris = imageUris,
+                musicUri = musicUri
+            )
+            history = (listOf(saved) + history).take(100)
+            saveHistory(ctx)
+
+            item.progress = 1f
+            item.stage = when {
+                imageUris.isNotEmpty() && musicUri != null -> "Saved photos and music"
+                imageUris.isNotEmpty() -> "Saved to Pictures/ADMOSS"
+                else -> "Saved to Music/ADMOSS"
+            }
+            item.status = Status.DONE
+            result = saved
+        } catch (e: Throwable) {
+            if (item.cancelled) {
+                item.status = Status.CANCELLED
+                item.stage = "Cancelled"
+            } else {
+                item.error = cleanError(e)
+                item.stage = "Failed"
+                item.status = Status.FAILED
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+        return result
+    }
+
     // ---- helpers ----
 
     private fun deleteThumb(item: HistoryItem) {
@@ -294,6 +445,7 @@ object DownloadCenter {
             c.connectTimeout = 8000
             c.readTimeout = 8000
             c.setRequestProperty("User-Agent", "Mozilla/5.0")
+            c.setRequestProperty("Referer", "https://www.tiktok.com/")
             c.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
             if (file.length() > 0) file.absolutePath else null
         } catch (e: Throwable) {
@@ -368,7 +520,9 @@ object DownloadCenter {
                 o.getString("t"), o.getString("u"), o.getBoolean("a"),
                 o.optString("p", "").ifBlank { null }, o.optInt("i", 0),
                 o.optString("th", "").ifBlank { null },
-                o.optLong("sz", 0L)
+                o.optLong("sz", 0L),
+                (o.optJSONArray("pu")?.let { a -> (0 until a.length()).map { i -> a.getString(i) } } ?: emptyList()),
+                o.optString("mu", "").ifBlank { null }
             )
         }
     } catch (e: Throwable) {
@@ -381,6 +535,7 @@ object DownloadCenter {
             arr.put(
                 JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
                     .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "").put("sz", it.size)
+                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "")
             )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)

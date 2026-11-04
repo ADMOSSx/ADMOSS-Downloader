@@ -54,6 +54,12 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     private var sizeCancelled = false
     private var sizePid: String? = null
 
+    // ---- TikTok photo post (pictures + music) ----
+    var photo by mutableStateOf<PhotoPost?>(null)
+    var photoPreviews by mutableStateOf<List<ImageBitmap>>(emptyList())
+    var photoWantImages by mutableStateOf(true)
+    var photoWantMusic by mutableStateOf(true)
+
     private var infoSeq = 0
     private var infoPid: String? = null
 
@@ -105,6 +111,8 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         selectedUrls = emptySet()
         cancelSizeCalc()
         playlistInfos = emptyMap()
+        photo = null
+        photoPreviews = emptyList()
         sizeChecked = 0
         sizeTotal = 0
         sizeNote = null
@@ -125,7 +133,23 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 if (seq != infoSeq) return@launch
                 if (Engine.downFlag) throw Exception("Engine failed")
 
-                if (asPlaylist) fetchPlaylist(url, seq) else fetchSingle(url, seq)
+                val tiktok = TikTokPhotos.isTikTok(url)
+                if (tiktok && url.contains("/photo/")) {
+                    // Photo posts: yt-dlp cannot get the pictures, so read the post directly
+                    if (!loadPhoto(url, seq)) throw Exception("Couldn't read this photo post. Try again in a moment.")
+                } else if (asPlaylist) {
+                    fetchPlaylist(url, seq)
+                } else {
+                    try {
+                        fetchSingle(url, seq)
+                        // yt-dlp returns only the music for a photo post: look for the pictures
+                        if (tiktok && seq == infoSeq && info?.hasVideo == false) loadPhoto(url, seq)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        if (!(tiktok && seq == infoSeq && loadPhoto(url, seq))) throw e
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -300,19 +324,38 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         selectedUrls = if (on) playlist?.entries?.map { it.url }?.toSet() ?: emptySet() else emptySet()
     }
 
-    private fun loadThumb(url: String?): ImageBitmap? {
+    private fun loadThumb(url: String?, sample: Int = 2): ImageBitmap? {
         if (url.isNullOrBlank()) return null
         return try {
             val c = URL(url).openConnection() as HttpURLConnection
             c.connectTimeout = 8000
             c.readTimeout = 8000
             c.setRequestProperty("User-Agent", "Mozilla/5.0")
+            if (url.contains("tiktok", ignoreCase = true)) c.setRequestProperty("Referer", "https://www.tiktok.com/")
             val bytes = c.inputStream.use { it.readBytes() }
-            val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
         } catch (e: Throwable) {
             null
         }
+    }
+
+    /** Reads a TikTok photo post and loads a few small previews. Returns false if it is not one. */
+    private fun loadPhoto(url: String, seq: Int): Boolean {
+        val post = TikTokPhotos.fetch(url) ?: return false
+        if (seq != infoSeq) return true
+
+        val previews = post.images.take(6).mapNotNull { loadThumb(it, 4) }
+        if (seq != infoSeq) return true
+
+        info = null
+        thumb = null
+        playlistHint = false
+        photoWantImages = true
+        photoWantMusic = post.musicUrl != null
+        photoPreviews = previews
+        photo = post
+        return true
     }
 
     // ---------- downloading ----------
@@ -350,6 +393,34 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (!Engine.ready) return
 
+        val post = photo
+        if (post != null) {
+            if (!photoWantImages && !photoWantMusic) {
+                message = "Choose photos, music, or both"
+                return
+            }
+            if (!photoWantImages && post.musicUrl == null) {
+                message = "This post has no music"
+                return
+            }
+            val label = post.title.ifBlank { "TikTok photos" }.take(60)
+            val item = QueueItem(
+                id = DownloadCenter.newId(),
+                url = url,
+                title = label,
+                audio = false,
+                height = null,
+                thumbUrl = post.images.firstOrNull(),
+                photo = post,
+                photoImages = photoWantImages,
+                photoMusic = photoWantMusic && post.musicUrl != null
+            )
+            DownloadCenter.enqueue(listOf(item))
+            startQueueService(listOf(item))
+            onLinkChange("")
+            return
+        }
+
         val pl = playlist
         val items: List<QueueItem> = if (pl != null) {
             val chosen = pl.entries.withIndex().filter { it.value.url in selectedUrls }
@@ -365,6 +436,13 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
         DownloadCenter.enqueue(items)
 
+        startQueueService(items)
+
+        // Clear the box so the next link can be pasted right away
+        onLinkChange("")
+    }
+
+    private fun startQueueService(items: List<QueueItem>) {
         val intent = Intent(ctx, DownloadService::class.java).setAction(DownloadService.ACTION_START)
         try {
             ContextCompat.startForegroundService(ctx, intent)
@@ -375,8 +453,5 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 it.status = Status.FAILED
             }
         }
-
-        // Clear the box so the next link can be pasted right away
-        onLinkChange("")
     }
 }

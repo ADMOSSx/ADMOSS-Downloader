@@ -51,6 +51,13 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Photo slideshow with music for TikTok photo posts -->
+        <activity
+            android:name=".PhotoViewerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <!-- Built-in player for downloads and playlists -->
         <activity
             android:name=".PlayerActivity"

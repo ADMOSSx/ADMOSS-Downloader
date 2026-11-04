@@ -172,7 +172,10 @@ class DownloadService : Service() {
 
         if (done == 1 && failed == 0 && last != null) {
             val view = Intent(Intent.ACTION_VIEW)
-                .setDataAndType(Uri.parse(last.uri), if (last.audio) "audio/*" else "video/*")
+                .setDataAndType(
+                    Uri.parse(last.uri),
+                    if (last.photoUris.isNotEmpty()) "image/*" else if (last.audio) "audio/*" else "video/*"
+                )
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             val pi = PendingIntent.getActivity(
                 this, 2, view,

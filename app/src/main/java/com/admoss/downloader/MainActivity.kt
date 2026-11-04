@@ -390,6 +390,10 @@ private fun DownloadTab(vm: DownloadViewModel) {
                 AnimatedVisibility(visible = vm.infoLoading || vm.info != null) { InfoCard(vm) }
             }
 
+            vm.photo?.let { post ->
+                item { PhotoCard(vm, post) }
+            }
+
             val pl = vm.playlist
             if (pl != null) {
                 item { PlaylistHeader(vm, pl) }
@@ -398,7 +402,9 @@ private fun DownloadTab(vm: DownloadViewModel) {
                 }
             }
 
-            item { OptionsCard(vm) }
+            if (vm.photo == null) {
+                item { OptionsCard(vm) }
+            }
 
             vm.message?.let { msg ->
                 item { MessageCard(msg) }
@@ -864,6 +870,102 @@ private fun PlaylistRow(entry: PlaylistEntry, checked: Boolean, sizeBytes: Long,
     }
 }
 
+@Composable
+private fun CheckRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onChange(!checked) }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            colors = CheckboxDefaults.colors(
+                checkedColor = p.accent,
+                uncheckedColor = p.sub,
+                checkmarkColor = p.onAccent
+            )
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(text, color = p.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun PhotoCard(vm: DownloadViewModel, post: PhotoPost) {
+    val p = LocalPalette.current
+    GlassCard {
+        Pill("TikTok photo post", p.accent)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            post.title.ifBlank { "Photo post" },
+            color = p.text,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (post.author.isNotBlank()) {
+            Text("@${post.author}", color = p.sub, fontSize = 13.sp)
+        }
+
+        if (vm.photoPreviews.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                vm.photoPreviews.forEach { bmp ->
+                    Image(
+                        bitmap = bmp,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .width(72.dp)
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                }
+                val more = post.images.size - vm.photoPreviews.size
+                if (more > 0) {
+                    Box(
+                        Modifier
+                            .width(72.dp)
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(p.border),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("+$more", color = p.sub, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        CheckRow(
+            if (post.images.size == 1) "The photo" else "All ${post.images.size} photos",
+            vm.photoWantImages
+        ) { vm.photoWantImages = it }
+        if (post.musicUrl != null) {
+            val name = if (post.musicTitle.isNotBlank()) "Music: ${post.musicTitle}" else "Music (MP3)"
+            CheckRow(name, vm.photoWantMusic) { vm.photoWantMusic = it }
+        } else {
+            Text("No music found in this post", color = p.sub, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Photos are saved in Pictures/ADMOSS and music in Music/ADMOSS.",
+            color = p.sub,
+            fontSize = 12.sp
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OptionsCard(vm: DownloadViewModel) {
@@ -952,8 +1054,19 @@ private fun DownloadButton(vm: DownloadViewModel) {
     val context = LocalContext.current
     val pl = vm.playlist
     val selectedCount = vm.selectedUrls.size
-    val enabled = Engine.ready && vm.link.isNotBlank() && (pl == null || selectedCount > 0)
+    val photoPost = vm.photo
+    val enabled = Engine.ready && vm.link.isNotBlank() && (pl == null || selectedCount > 0) &&
+        (photoPost == null || vm.photoWantImages || vm.photoWantMusic)
     val label = when {
+        photoPost != null -> {
+            val n = photoPost.images.size
+            val music = vm.photoWantMusic && photoPost.musicUrl != null
+            when {
+                vm.photoWantImages && music -> "Download $n photos + music"
+                vm.photoWantImages -> "Download $n photos"
+                else -> "Download music"
+            }
+        }
         pl != null -> if (selectedCount == 1) "Download 1 video" else "Download $selectedCount videos"
         vm.audioOnly -> "Download MP3"
         else -> "Download"
@@ -1178,6 +1291,14 @@ private fun playItems(context: Context, items: List<HistoryItem>, start: Int, na
     context.startActivity(i)
 }
 
+private fun openPhotos(context: Context, item: HistoryItem) {
+    val i = Intent(context, PhotoViewerActivity::class.java)
+        .putStringArrayListExtra(PhotoViewerActivity.EXTRA_URIS, ArrayList(item.photoUris))
+        .putExtra(PhotoViewerActivity.EXTRA_MUSIC, item.musicUri ?: "")
+        .putExtra(PhotoViewerActivity.EXTRA_TITLE, item.title)
+    context.startActivity(i)
+}
+
 /** Total size of some downloads. A "+" means some older files have no size saved. */
 private fun totalSizeText(items: List<HistoryItem>): String {
     val total = items.sumOf { it.size }
@@ -1302,7 +1423,10 @@ private fun LibraryTab() {
                 items(shown, key = { it.uri }) { item ->
                     HistoryRow(
                         item,
-                        onOpen = { playItems(context, listOf(item), 0) },
+                        onOpen = {
+                            if (item.photoUris.isNotEmpty()) openPhotos(context, item)
+                            else playItems(context, listOf(item), 0)
+                        },
                         onRemove = { DownloadCenter.removeHistory(context, item) }
                     )
                 }
@@ -1630,7 +1754,7 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
                 .width(96.dp)
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(10.dp)),
-            if (item.audio) R.drawable.ic_music else R.drawable.ic_play,
+            if (item.photoUris.isNotEmpty()) R.drawable.ic_photo else if (item.audio) R.drawable.ic_music else R.drawable.ic_play,
             24.dp
         )
         Spacer(Modifier.width(12.dp))
@@ -1643,7 +1767,14 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            val kind = if (item.audio) "Audio" else "Video"
+            val kind = when {
+                item.photoUris.isNotEmpty() -> {
+                    val n = item.photoUris.size
+                    (if (n == 1) "1 photo" else "$n photos") + if (item.musicUri != null) " + music" else ""
+                }
+                item.audio -> "Audio"
+                else -> "Video"
+            }
             Text(
                 if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
                 color = p.sub,
