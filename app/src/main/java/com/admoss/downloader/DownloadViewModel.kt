@@ -220,7 +220,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         req.addOption("--dump-single-json")
         req.addOption("--no-warnings")
         req.addOption("--socket-timeout", "10")
-        if (fallback) YtOptions.addFallback(req)
+        if (fallback) YtOptions.addFallback(req, true) else YtOptions.addInfoSpeedups(req)
         return YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }.out
     }
 

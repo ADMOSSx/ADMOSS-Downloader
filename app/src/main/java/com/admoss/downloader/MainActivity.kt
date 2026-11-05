@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.admoss.downloader
 
 import android.Manifest
@@ -18,6 +20,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -30,6 +36,8 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -54,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 // ---------- colors & theme ----------
 
@@ -406,8 +415,14 @@ private fun DownloadTab(vm: DownloadViewModel) {
                 }
             }
 
-            if (vm.photo == null) {
-                item { OptionsCard(vm) }
+            if (vm.photo == null && (vm.info != null || vm.quick != null || vm.playlist != null || vm.infoError)) {
+                item {
+                    val appear = remember { MutableTransitionState(false).apply { targetState = true } }
+                    AnimatedVisibility(
+                        visibleState = appear,
+                        enter = fadeIn(tween(300)) + expandVertically(tween(300))
+                    ) { OptionsCard(vm) }
+                }
             }
 
             vm.message?.let { msg ->
@@ -1378,22 +1393,28 @@ private fun itemIcon(item: HistoryItem): Int = when {
     else -> R.drawable.ic_play
 }
 
+/** The selected tab opens up and shows its name; the others stay small. */
 @Composable
-private fun CategoryChip(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+private fun CategoryTab(label: String, @DrawableRes icon: Int, count: Int, selected: Boolean, onClick: () -> Unit) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(10.dp)
+    val bg by animateColorAsState(if (selected) p.accent else Color.Transparent, tween(250), label = "tabBg")
+    val fg by animateColorAsState(if (selected) p.onAccent else p.sub, tween(250), label = "tabFg")
     Row(
         Modifier
-            .clip(shape)
-            .background(if (selected) p.accent else p.card)
-            .border(1.dp, if (selected) p.accent else p.border, shape)
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .animateContentSize(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = if (selected) p.onAccent else p.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.width(6.dp))
-        Text("$count", color = if (selected) p.onAccent.copy(alpha = 0.8f) else p.sub, fontSize = 12.sp)
+        Ico(icon, fg, 20.dp)
+        if (selected) {
+            Spacer(Modifier.width(7.dp))
+            Text(label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Spacer(Modifier.width(6.dp))
+            Text("$count", color = fg.copy(alpha = 0.8f), fontSize = 12.sp)
+        }
     }
 }
 
@@ -1516,7 +1537,8 @@ private fun PickVideosDialog(
 private fun LibraryTab() {
     val p = LocalPalette.current
     val context = LocalContext.current
-    var category by rememberSaveable { mutableStateOf(0) } // 0 all, 1 videos, 2 music, 3 photos, 4 playlists
+    val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { 5 }) // all, videos, music, photos, playlists
     var gridView by rememberSaveable { mutableStateOf(false) }
     var openName by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -1548,14 +1570,6 @@ private fun LibraryTab() {
         val music = all.filter { it.audio && it.photoUris.isEmpty() }
         val photos = all.filter { it.photoUris.isNotEmpty() }
         val groups = all.filter { it.playlist != null }.groupBy { it.playlist ?: "" }
-        val groupNames = groups.keys.toList().filter { query.isBlank() || it.contains(query, ignoreCase = true) }
-        val base = when (category) {
-            1 -> videos
-            2 -> music
-            3 -> photos
-            else -> all
-        }
-        val shown = if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
 
         if (showNew) {
             PickVideosDialog(
@@ -1566,21 +1580,15 @@ private fun LibraryTab() {
                 onConfirm = { n, uris ->
                     DownloadCenter.addToPlaylist(context, n, uris)
                     showNew = false
-                    category = 4
                     openName = n.trim()
+                    scope.launch { pagerState.scrollToPage(4) }
                 },
                 onDismiss = { showNew = false }
             )
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(if (gridView) 2 else 1),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
+        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Library",
@@ -1599,11 +1607,17 @@ private fun LibraryTab() {
                         Ico(if (gridView) R.drawable.ic_list else R.drawable.ic_grid, p.text, 22.dp, "Change view")
                     }
                 }
-            }
 
-            if (DownloadCenter.restoring || DownloadCenter.restoreMessage != null) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    val shape = RoundedCornerShape(14.dp)
+                val sizeText = totalSizeText(all)
+                Text(
+                    "${all.size} items  •  ${groups.size} playlists" + if (sizeText != "-") "  •  $sizeText" else "",
+                    color = p.sub,
+                    fontSize = 13.sp
+                )
+
+                if (DownloadCenter.restoring || DownloadCenter.restoreMessage != null) {
+                    Spacer(Modifier.height(10.dp))
+                    val shape = RoundedCornerShape(12.dp)
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -1611,7 +1625,7 @@ private fun LibraryTab() {
                             .background(p.card)
                             .border(1.dp, p.border, shape)
                             .clickable(enabled = !DownloadCenter.restoring) { DownloadCenter.restoreMessage = null }
-                            .padding(14.dp),
+                            .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (DownloadCenter.restoring) {
@@ -1629,36 +1643,33 @@ private fun LibraryTab() {
                         }
                     }
                 }
-            }
 
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StatCard("${all.size}", "Items", Modifier.weight(1f))
-                    StatCard("${groups.size}", "Playlists", Modifier.weight(1f))
-                    StatCard(totalSizeText(all), "Storage used", Modifier.weight(1f))
-                }
-            }
-
-            item(span = { GridItemSpan(maxLineSpan) }) {
+                Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    CategoryChip("All", all.size, category == 0) { category = 0 }
-                    CategoryChip("Videos", videos.size, category == 1) { category = 1 }
-                    CategoryChip("Music", music.size, category == 2) { category = 2 }
-                    CategoryChip("Photos", photos.size, category == 3) { category = 3 }
-                    CategoryChip("Playlists", groups.size, category == 4) { category = 4 }
+                    val tabs = listOf(
+                        Triple("All", R.drawable.ic_library, all.size),
+                        Triple("Videos", R.drawable.ic_video, videos.size),
+                        Triple("Music", R.drawable.ic_music, music.size),
+                        Triple("Photos", R.drawable.ic_photo, photos.size),
+                        Triple("Playlists", R.drawable.ic_playlist, groups.size)
+                    )
+                    tabs.forEachIndexed { i, t ->
+                        CategoryTab(t.first, t.second, t.third, pagerState.currentPage == i) {
+                            scope.launch { pagerState.animateScrollToPage(i) }
+                        }
+                    }
                 }
-            }
 
-            item(span = { GridItemSpan(maxLineSpan) }) {
+                Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    placeholder = { Text(if (category == 4) "Search playlists" else "Search your downloads") },
+                    placeholder = { Text(if (pagerState.currentPage == 4) "Search playlists" else "Search your downloads") },
                     leadingIcon = { Ico(R.drawable.ic_search, p.sub, 22.dp) },
                     trailingIcon = {
                         if (query.isNotEmpty()) {
@@ -1676,74 +1687,122 @@ private fun LibraryTab() {
                         unfocusedPlaceholderColor = p.sub
                     )
                 )
+                Spacer(Modifier.height(10.dp))
             }
 
-            if (category == 4) {
+            // Swipe left or right to move between the categories
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) { page ->
+                LibraryPage(
+                    category = page,
+                    gridView = gridView,
+                    query = query,
+                    onOpenPlaylist = { openName = it },
+                    onNewPlaylist = { showNew = true }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryPage(
+    category: Int,
+    gridView: Boolean,
+    query: String,
+    onOpenPlaylist: (String) -> Unit,
+    onNewPlaylist: () -> Unit
+) {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+    val all = DownloadCenter.history
+    val groups = all.filter { it.playlist != null }.groupBy { it.playlist ?: "" }
+    val groupNames = groups.keys.toList().filter { query.isBlank() || it.contains(query, ignoreCase = true) }
+    val base = when (category) {
+        1 -> all.filter { !it.audio && it.photoUris.isEmpty() }
+        2 -> all.filter { it.audio && it.photoUris.isEmpty() }
+        3 -> all.filter { it.photoUris.isNotEmpty() }
+        4 -> emptyList()
+        else -> all
+    }
+    val shown = if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(if (gridView) 2 else 1),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        if (category == 4) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                SmallAction("New playlist", R.drawable.ic_add, Modifier.fillMaxWidth()) { onNewPlaylist() }
+            }
+            if (groups.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    SmallAction("New playlist", R.drawable.ic_add, Modifier.fillMaxWidth()) { showNew = true }
+                    Text(
+                        "No playlists yet. Download a playlist, or tap New playlist to put your own videos together.",
+                        color = p.sub,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
-                if (groups.isEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            "No playlists yet. Download a playlist, or tap New playlist to put your own videos together.",
-                            color = p.sub,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(top = 12.dp)
-                        )
-                    }
-                } else if (groupNames.isEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text("No playlists match \"$query\".", color = p.sub, fontSize = 14.sp, modifier = Modifier.padding(top = 12.dp))
-                    }
+            } else if (groupNames.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("No playlists match \"$query\".", color = p.sub, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
                 }
-                items(groupNames, key = { it }) { groupName ->
-                    val list = (groups[groupName] ?: emptyList()).sortedBy { it.index }
-                    if (gridView) {
-                        PlaylistGridCard(
-                            name = groupName,
-                            videos = list,
-                            onOpen = { openName = groupName },
-                            onPlay = { playItems(context, list, 0, groupName) }
-                        )
-                    } else {
-                        PlaylistCard(
-                            name = groupName,
-                            videos = list,
-                            onOpen = { openName = groupName },
-                            onPlay = { playItems(context, list, 0, groupName) }
-                        )
-                    }
+            }
+            items(groupNames, key = { it }) { groupName ->
+                val list = (groups[groupName] ?: emptyList()).sortedBy { it.index }
+                if (gridView) {
+                    PlaylistGridCard(
+                        name = groupName,
+                        videos = list,
+                        onOpen = { onOpenPlaylist(groupName) },
+                        onPlay = { playItems(context, list, 0, groupName) }
+                    )
+                } else {
+                    PlaylistCard(
+                        name = groupName,
+                        videos = list,
+                        onOpen = { onOpenPlaylist(groupName) },
+                        onPlay = { playItems(context, list, 0, groupName) }
+                    )
                 }
-            } else {
-                if (base.isEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            when (category) {
-                                1 -> "No videos yet."
-                                2 -> "No music yet."
-                                3 -> "No photos yet."
-                                else -> "Nothing here yet. Finished downloads show up in this list. If you reinstalled the app, tap the arrow icon at the top to find the files it saved before."
-                            },
-                            color = p.sub,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(top = 12.dp)
-                        )
-                    }
-                } else if (shown.isEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text("Nothing matches \"$query\".", color = p.sub, fontSize = 14.sp, modifier = Modifier.padding(top = 12.dp))
-                    }
+            }
+        } else {
+            if (base.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        when (category) {
+                            1 -> "No videos yet."
+                            2 -> "No music yet."
+                            3 -> "No photos yet."
+                            else -> "Nothing here yet. Finished downloads show up in this list. If you reinstalled the app, tap the arrow icon at the top to find the files it saved before."
+                        },
+                        color = p.sub,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
-                items(shown, key = { it.uri }) { entry ->
-                    val open = {
-                        if (entry.photoUris.isNotEmpty()) openPhotos(context, entry)
-                        else playItems(context, listOf(entry), 0)
-                    }
-                    if (gridView) {
-                        MediaGridCard(entry, onOpen = open, onRemove = { DownloadCenter.removeHistory(context, entry) })
-                    } else {
-                        HistoryRow(entry, onOpen = open, onRemove = { DownloadCenter.removeHistory(context, entry) })
-                    }
+            } else if (shown.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("Nothing matches \"$query\".", color = p.sub, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+            items(shown, key = { it.uri }) { entry ->
+                val open = {
+                    if (entry.photoUris.isNotEmpty()) openPhotos(context, entry)
+                    else playItems(context, listOf(entry), 0)
+                }
+                if (gridView) {
+                    MediaGridCard(entry, onOpen = open, onRemove = { DownloadCenter.removeHistory(context, entry) })
+                } else {
+                    HistoryRow(entry, onOpen = open, onRemove = { DownloadCenter.removeHistory(context, entry) })
                 }
             }
         }
