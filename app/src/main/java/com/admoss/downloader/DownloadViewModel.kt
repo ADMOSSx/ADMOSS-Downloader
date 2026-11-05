@@ -14,10 +14,12 @@ import androidx.lifecycle.viewModelScope
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.HttpURLConnection
+import java.util.concurrent.ConcurrentHashMap
 import java.net.URL
 
 class DownloadViewModel(app: Application) : AndroidViewModel(app) {
@@ -60,6 +62,12 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     var photoWantImages by mutableStateOf(true)
     var photoWantMusic by mutableStateOf(true)
 
+    // title and cover shown at once, while the sizes are still loading
+    var quick by mutableStateOf<QuickInfo?>(null)
+
+    private val infoCache = ConcurrentHashMap<String, VideoInfoUi>()
+    private val thumbCache = ConcurrentHashMap<String, ImageBitmap>()
+
     private var infoSeq = 0
     private var infoPid: String? = null
 
@@ -70,13 +78,13 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setSharedText(text: String) {
         val url = Regex("https?://\\S+").find(text)?.value ?: text.trim()
-        onLinkChange(url)
+        onLinkChange(url, true)
     }
 
-    fun onLinkChange(text: String) {
+    fun onLinkChange(text: String, immediate: Boolean = false) {
         link = text
         message = null
-        refreshInfo()
+        refreshInfo(immediate)
     }
 
     // ---------- info / playlist loading ----------
@@ -98,11 +106,12 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         infoPid = null
     }
 
-    private fun refreshInfo() {
+    private fun refreshInfo(immediate: Boolean = false) {
         val seq = ++infoSeq
         stopInfoProcess()
 
         info = null
+        quick = null
         thumb = null
         infoError = false
         infoErrorText = null
@@ -122,33 +131,75 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
             infoLoading = false
             return
         }
-        infoLoading = true
         val asPlaylist = isPlaylistUrl(url)
+        val cached = infoCache[url]
+        if (cached != null && !asPlaylist) {
+            info = cached
+            thumb = thumbCache[url]
+            playlistHint = url.lowercase().contains("list=")
+            if (!cached.sizes.containsKey(quality)) quality = Quality.BEST
+            infoLoading = false
+            return
+        }
+        infoLoading = true
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                delay(600) // wait while the user is still typing / pasting
+                if (!immediate) delay(350) // wait while the user is still typing
                 if (seq != infoSeq) return@launch
-                while (!Engine.upFlag && !Engine.downFlag) delay(200)
-                if (seq != infoSeq) return@launch
-                if (Engine.downFlag) throw Exception("Engine failed")
+
+                // Title and cover first: a tiny request that does not need the engine
+                if (!asPlaylist) {
+                    launch {
+                        val q = Oembed.fetch(url)
+                        if (q != null && seq == infoSeq) {
+                            val bmp = loadThumb(q.thumbnailUrl, if (url.contains("tiktok", true)) 2 else 1)
+                            if (seq == infoSeq && info == null && photo == null) {
+                                quick = q
+                                thumb = bmp
+                            }
+                        }
+                    }
+                }
 
                 val tiktok = TikTokPhotos.isTikTok(url)
                 if (tiktok && url.contains("/photo/")) {
                     // Photo posts: yt-dlp cannot get the pictures, so read the post directly
                     if (!loadPhoto(url, seq)) throw Exception("Couldn't read this photo post. Try again in a moment.")
-                } else if (asPlaylist) {
+                    return@launch
+                }
+
+                // TikTok links: check for a photo post at the same time as the normal lookup
+                val photoJob = if (tiktok && !asPlaylist) async { TikTokPhotos.fetch(url) } else null
+
+                while (!Engine.upFlag && !Engine.downFlag) delay(200)
+                if (seq != infoSeq) return@launch
+                if (Engine.downFlag) throw Exception("Engine failed")
+
+                if (asPlaylist) {
                     fetchPlaylist(url, seq)
-                } else {
-                    try {
-                        fetchSingle(url, seq)
-                        // yt-dlp returns only the music for a photo post: look for the pictures
-                        if (tiktok && seq == infoSeq && info?.hasVideo == false) loadPhoto(url, seq)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        if (!(tiktok && seq == infoSeq && loadPhoto(url, seq))) throw e
+                } else if (photoJob != null) {
+                    val ytJob = async {
+                        try {
+                            fetchSingle(url, seq)
+                            null
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            e
+                        }
                     }
+                    val post = photoJob.await()
+                    if (post != null) {
+                        stopInfoProcess()
+                        ytJob.cancel()
+                        applyPhoto(post, seq)
+                    } else {
+                        val err = ytJob.await()
+                        if (err != null) throw err
+                    }
+                } else {
+                    fetchSingle(url, seq)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -168,6 +219,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         if (flat) req.addOption("--flat-playlist") else req.addOption("--no-playlist")
         req.addOption("--dump-single-json")
         req.addOption("--no-warnings")
+        req.addOption("--socket-timeout", "10")
         if (fallback) YtOptions.addFallback(req)
         return YoutubeDL.getInstance().execute(req, pid) { _, _, _ -> }.out
     }
@@ -191,9 +243,17 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         if (seq != infoSeq) return
 
         val parsed = InfoParser.parse(raw)
-        val bmp = loadThumb(parsed.thumbnailUrl)
+        val bmp = thumb ?: loadThumb(parsed.thumbnailUrl)
         if (seq != infoSeq) return
 
+        if (infoCache.size > 30) {
+            infoCache.clear()
+            thumbCache.clear()
+        }
+        infoCache[url] = parsed
+        if (bmp != null) thumbCache[url] = bmp
+
+        quick = null
         info = parsed
         thumb = bmp
         playlistHint = url.lowercase().contains("list=")
@@ -215,7 +275,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun retryInfo() {
-        refreshInfo()
+        refreshInfo(true)
     }
 
     /** The link is a video inside a playlist: load the whole playlist instead. */
@@ -340,22 +400,26 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Reads a TikTok photo post and loads a few small previews. Returns false if it is not one. */
+    /** Reads a TikTok photo post. Returns false if the link is not one. */
     private fun loadPhoto(url: String, seq: Int): Boolean {
         val post = TikTokPhotos.fetch(url) ?: return false
-        if (seq != infoSeq) return true
+        applyPhoto(post, seq)
+        return true
+    }
 
+    private fun applyPhoto(post: PhotoPost, seq: Int) {
+        if (seq != infoSeq) return
         val previews = post.images.take(6).mapNotNull { loadThumb(it, 4) }
-        if (seq != infoSeq) return true
+        if (seq != infoSeq) return
 
         info = null
+        quick = null
         thumb = null
         playlistHint = false
         photoWantImages = true
         photoWantMusic = post.musicUrl != null
         photoPreviews = previews
         photo = post
-        return true
     }
 
     // ---------- downloading ----------
@@ -403,7 +467,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 message = "This post has no music"
                 return
             }
-            val label = post.title.ifBlank { "TikTok photos" }.take(60)
+            val label = cutText(post.title.ifBlank { "TikTok photos" }, 60)
             val item = QueueItem(
                 id = DownloadCenter.newId(),
                 url = url,

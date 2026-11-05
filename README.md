@@ -49,13 +49,12 @@
 | 🖼️ | **TikTok photo posts**: save every photo plus the post's music, then watch them as a slideshow with the music playing |
 | 📚 | **Download queue**: paste many links, they download one after another |
 | 📃 | **Playlist support**: load a whole playlist and pick the videos you want |
-| 🧮 | **Playlist size calculator**: see the total download size of the selected videos, and the size of every video, before you download |
 | 🗂️ | **Playlists section** in the Library: each playlist is a folder with all its videos in order |
-| ▶️ | **Built-in player** with speed control (0.5x to 2x), double-tap to skip 10 seconds, **brightness and volume swipes**, **resume where you stopped**, repeat modes, zoom to fill and a **playlist menu** to jump to any video |
+| ▶️ | **Built-in player** with speed control (0.5x to 2x), double-tap to skip 10 seconds, a seek bar and a **playlist menu** to jump to any video |
 | 🔀 | **PLAY ALL** and **SHUFFLE** for playlists |
 | 🖼️ | **Cover images** for every download and playlist |
 | 🔔 | **Background downloads** with a notification (progress, cancel) |
-| 🔎 | **Library** with search and storage stats (downloads, playlists, space used, size of each playlist) |
+| 🔎 | **Library search** |
 | 🌗 | **Dark and light** themes |
 | 🔄 | **In-app updates**: new versions install over the old one |
 | 🛡️ | Automatic **second try** with different network settings when YouTube blocks the first one |
@@ -123,7 +122,7 @@ Google Play does not allow apps that download from YouTube, so it is shared here
 Tap **Try again**. If it still fails, tap **Update engine** (YouTube changes often), turn off any VPN, and wait a few minutes if it says too many requests.
 
 **Where are my files saved?**
-Videos in `Movies/ADMOSS`, audio in `Music/ADMOSS` and TikTok photos in `Pictures/ADMOSS`. They show up in your gallery and music apps.
+Videos in `Movies/ADMOSS`, audio in `Music/ADMOSS` and TikTok photos in `Pictures/ADMOSS`. Playlist videos go in a folder named after the playlist. They show up in your gallery and music apps.
 
 **Which phones are supported?**
 Android 10 or newer. Use the `arm64-v8a` APK unless your phone is very old.

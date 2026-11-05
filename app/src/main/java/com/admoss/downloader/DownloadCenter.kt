@@ -13,7 +13,13 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import org.json.JSONArray
 import org.json.JSONObject
+import android.content.ContentUris
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
+import android.util.Size
 import java.io.File
+import kotlin.concurrent.thread
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -64,6 +70,8 @@ object DownloadCenter {
 
     val queue = mutableStateListOf<QueueItem>()
     var history by mutableStateOf<List<HistoryItem>>(emptyList())
+    var restoring by mutableStateOf(false)
+    var restoreMessage by mutableStateOf<String?>(null)
 
     @Volatile
     private var currentPid: String? = null
@@ -252,14 +260,16 @@ object DownloadCenter {
                 ?.maxByOrNull { it.length() }
                 ?: throw Exception("Download finished but no file was found")
 
-            val uri = saveToMediaStore(ctx, out, item.audio)
+            val folder = item.playlist?.let { safeName(it, 60) }.orEmpty()
+            val prefix = if (item.playlist != null) (item.index + 1).toString().padStart(2, '0') + " - " else ""
+            val uri = saveToMediaStore(ctx, out, item.audio, folder, prefix)
 
             val thumbPath = saveThumb(ctx, item.thumbUrl, item.id)
             val saved = HistoryItem(
                 out.nameWithoutExtension, uri.toString(), item.audio,
                 item.playlist, item.index, thumbPath, out.length()
             )
-            history = (listOf(saved) + history).take(100)
+            history = (listOf(saved) + history).take(500)
             saveHistory(ctx)
 
             item.progress = 1f
@@ -283,10 +293,250 @@ object DownloadCenter {
         return result
     }
 
+    // ---- restore the library after a reinstall ----
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private class Found(val date: Long, val item: HistoryItem)
+
+    /** Looks in Movies/Music/Pictures ADMOSS for files this app saved before and adds them back. */
+    fun restoreAsync(ctx: Context, silent: Boolean) {
+        if (restoring) return
+        val app = ctx.applicationContext
+        restoring = true
+        if (!silent) restoreMessage = null
+        thread(name = "admoss-restore") {
+            val n = try {
+                restoreFromDevice(app)
+            } catch (e: Throwable) {
+                -1
+            }
+            mainHandler.post {
+                restoring = false
+                if (!silent || n > 0) {
+                    restoreMessage = when {
+                        n < 0 -> "Couldn't read your files. Allow access to photos, videos and music, then try again."
+                        n == 0 -> "Everything saved on this phone is already in your library."
+                        n == 1 -> "Restored 1 item from this phone."
+                        else -> "Restored $n items from this phone."
+                    }
+                }
+            }
+        }
+    }
+
+    private fun splitNumber(name: String): Pair<Int, String> {
+        val m = Regex("^(\\d{1,4}) - (.*)$").find(name) ?: return Pair(0, name)
+        val n = ((m.groupValues[1].toIntOrNull() ?: 1) - 1).coerceAtLeast(0)
+        return Pair(n, m.groupValues[2])
+    }
+
+    private fun makeThumb(ctx: Context, uri: Uri, key: String): String? = try {
+        val bmp = ctx.contentResolver.loadThumbnail(uri, Size(480, 270), null)
+        val dir = File(ctx.filesDir, "thumbs").apply { mkdirs() }
+        val file = File(dir, "r${System.currentTimeMillis()}_$key.img")
+        file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+        file.absolutePath
+    } catch (e: Throwable) {
+        null
+    }
+
+    fun restoreFromDevice(ctx: Context): Int {
+        val resolver = ctx.contentResolver
+        val known = HashSet<String>()
+        history.forEach { h ->
+            known.add(h.uri)
+            known.addAll(h.photoUris)
+            h.musicUri?.let { known.add(it) }
+        }
+        val found = ArrayList<Found>()
+
+        fun scan(collection: Uri, root: String, onRow: (Long, String, Long, String, Long) -> Unit) {
+            val projection = arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.DATE_ADDED
+            )
+            resolver.query(
+                collection,
+                projection,
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                arrayOf("$root%"),
+                "${MediaStore.MediaColumns.DATE_ADDED} DESC"
+            )?.use { c ->
+                val iId = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val iName = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val iSize = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val iPath = c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+                val iDate = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+                while (c.moveToNext()) {
+                    onRow(c.getLong(iId), c.getString(iName) ?: "", c.getLong(iSize), c.getString(iPath) ?: "", c.getLong(iDate))
+                }
+            }
+        }
+
+        // Videos (a sub folder is a playlist, files start with their number)
+        val videoCol = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        scan(videoCol, "Movies/ADMOSS/") { id, name, size, rel, date ->
+            val uri = ContentUris.withAppendedId(videoCol, id)
+            if (uri.toString() in known) return@scan
+            val sub = rel.removePrefix("Movies/ADMOSS/").trim('/').substringBefore('/')
+            val (index, title) = splitNumber(name.substringBeforeLast('.'))
+            found.add(
+                Found(
+                    date,
+                    HistoryItem(
+                        title = title,
+                        uri = uri.toString(),
+                        audio = false,
+                        playlist = sub.ifBlank { null },
+                        index = if (sub.isBlank()) 0 else index,
+                        size = size
+                    )
+                )
+            )
+        }
+
+        // Music
+        val audioCol = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        scan(audioCol, "Music/ADMOSS/") { id, name, size, rel, date ->
+            val uri = ContentUris.withAppendedId(audioCol, id)
+            if (uri.toString() in known) return@scan
+            val sub = rel.removePrefix("Music/ADMOSS/").trim('/').substringBefore('/')
+            val (index, title) = splitNumber(name.substringBeforeLast('.'))
+            found.add(
+                Found(
+                    date,
+                    HistoryItem(
+                        title = title,
+                        uri = uri.toString(),
+                        audio = true,
+                        playlist = sub.ifBlank { null },
+                        index = if (sub.isBlank()) 0 else index,
+                        size = size
+                    )
+                )
+            )
+        }
+
+        // TikTok photo posts: one folder = one post
+        val imageCol = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val folders = LinkedHashMap<String, ArrayList<Triple<String, Uri, Long>>>()
+        val folderDate = HashMap<String, Long>()
+        scan(imageCol, "Pictures/ADMOSS/") { id, name, size, rel, date ->
+            val sub = rel.removePrefix("Pictures/ADMOSS/").trim('/').substringBefore('/')
+            if (sub.isBlank()) return@scan
+            folders.getOrPut(sub) { ArrayList() }.add(Triple(name, ContentUris.withAppendedId(imageCol, id), size))
+            if (!folderDate.containsKey(sub)) folderDate[sub] = date
+        }
+        for ((folder, files) in folders) {
+            val sorted = files.sortedBy { it.first }
+            val uris = sorted.map { it.second.toString() }
+            if (uris.all { it in known }) continue
+            val title = folder.replace(Regex(" \\d{4,5}$"), "").ifBlank { "TikTok photos" }
+            found.add(
+                Found(
+                    folderDate[folder] ?: 0L,
+                    HistoryItem(
+                        title = title,
+                        uri = uris.first(),
+                        audio = false,
+                        size = sorted.sumOf { it.third },
+                        photoUris = uris
+                    )
+                )
+            )
+        }
+
+        val items = found.sortedByDescending { it.date }.map { f ->
+            val h = f.item
+            if (h.audio) h else h.copy(thumb = makeThumb(ctx, Uri.parse(h.uri), h.uri.substringAfterLast('/')))
+        }
+        history = (items + history).take(500)
+        saveHistory(ctx)
+        return items.size
+    }
+
+    // ---- playlist editing ----
+
+    fun renamePlaylist(ctx: Context, old: String, newName: String) {
+        val n = newName.trim()
+        if (n.isBlank() || n == old) return
+        val affected = history.filter { it.playlist == old }
+        history = history.map { if (it.playlist == old) it.copy(playlist = n) else it }
+        saveHistory(ctx)
+        moveInBackground(ctx, affected, n)
+    }
+
+    fun addToPlaylist(ctx: Context, name: String, uris: List<String>) {
+        val n = name.trim()
+        if (n.isBlank() || uris.isEmpty()) return
+        var next = (history.filter { it.playlist == n }.maxOfOrNull { it.index } ?: -1) + 1
+        val moved = ArrayList<HistoryItem>()
+        for (u in uris) {
+            history = history.map {
+                if (it.uri == u && it.photoUris.isEmpty()) {
+                    val updated = it.copy(playlist = n, index = next)
+                    next += 1
+                    moved.add(updated)
+                    updated
+                } else {
+                    it
+                }
+            }
+        }
+        saveHistory(ctx)
+        moveInBackground(ctx, moved, n)
+    }
+
+    fun removeFromPlaylist(ctx: Context, item: HistoryItem) {
+        history = history.map { if (it.uri == item.uri) it.copy(playlist = null, index = 0) else it }
+        saveHistory(ctx)
+        moveInBackground(ctx, listOf(item), "")
+    }
+
+    /** Best effort: moves the files into the playlist folder so a later restore keeps the playlist. */
+    private fun moveInBackground(ctx: Context, items: List<HistoryItem>, playlist: String) {
+        val app = ctx.applicationContext
+        thread(name = "admoss-move") {
+            for (item in items) {
+                if (item.photoUris.isNotEmpty()) continue
+                try {
+                    val root = if (item.audio) "Music/ADMOSS" else "Movies/ADMOSS"
+                    val sub = safeName(playlist, 60)
+                    val path = if (sub.isBlank()) root else "$root/$sub"
+                    val values = ContentValues().apply { put(MediaStore.MediaColumns.RELATIVE_PATH, path) }
+                    app.contentResolver.update(Uri.parse(item.uri), values, null, null)
+                } catch (e: Throwable) {
+                    // not allowed for this file: the app still keeps the playlist
+                }
+            }
+        }
+    }
+
     // ---- TikTok photo posts ----
 
-    private fun safeName(text: String, max: Int): String =
-        text.replace(Regex("[\\\\/:*?\"<>|\\r\\n#]"), " ").replace(Regex("\\s+"), " ").trim().take(max).trim()
+    /** A file or folder name: letters, digits and a few simple symbols only (no emojis, no #). */
+    private fun safeName(text: String, max: Int): String {
+        val allowed = "'.-_(),&! "
+        val sb = StringBuilder()
+        var count = 0
+        var i = 0
+        while (i < text.length && count < max) {
+            val cp = text.codePointAt(i)
+            i += Character.charCount(cp)
+            val ok = Character.isLetterOrDigit(cp) || (cp < 128 && allowed.indexOf(cp.toChar()) >= 0)
+            if (ok) {
+                sb.appendCodePoint(cp)
+                count += 1
+            } else {
+                sb.append(' ')
+            }
+        }
+        return sb.toString().replace(Regex("\\s+"), " ").trim()
+    }
 
     /** Downloads one file. The extension comes from the server (jpg, webp, mp3 ...). */
     private fun downloadFile(url: String, base: File, defaultExt: String): File {
@@ -386,7 +636,7 @@ object DownloadCenter {
 
             val coverUrl = images.firstOrNull() ?: post.images.firstOrNull()
             val thumbPath = saveThumb(ctx, coverUrl, item.id)
-            val title = post.title.ifBlank { "TikTok photos" + if (post.author.isNotBlank()) " by @${post.author}" else "" }.take(90)
+            val title = cutText(post.title.ifBlank { "TikTok photos" + if (post.author.isNotBlank()) " by @${post.author}" else "" }, 90)
 
             val saved = HistoryItem(
                 title = title,
@@ -399,7 +649,7 @@ object DownloadCenter {
                 photoUris = imageUris,
                 musicUri = musicUri
             )
-            history = (listOf(saved) + history).take(100)
+            history = (listOf(saved) + history).take(500)
             saveHistory(ctx)
 
             item.progress = 1f
@@ -479,18 +729,18 @@ object DownloadCenter {
         }
     }
 
-    private fun saveToMediaStore(ctx: Context, file: File, audio: Boolean): Uri {
+    private fun saveToMediaStore(ctx: Context, file: File, audio: Boolean, sub: String = "", prefix: String = ""): Uri {
         val resolver = ctx.contentResolver
         val ext = file.extension.lowercase()
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
             ?: if (audio) "audio/mpeg" else "video/mp4"
 
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, prefix + file.name)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(
                 MediaStore.MediaColumns.RELATIVE_PATH,
-                if (audio) "Music/ADMOSS" else "Movies/ADMOSS"
+                (if (audio) "Music/ADMOSS" else "Movies/ADMOSS") + (if (sub.isNotBlank()) "/$sub" else "")
             )
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }

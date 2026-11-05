@@ -62,6 +62,7 @@ object Engine {
             }
             // Keep yt-dlp fresh: YouTube changes often. Silent if offline.
             try {
+                Thread.sleep(25000) // let the first video lookups finish first
                 YoutubeDL.getInstance().updateYoutubeDL(app)
             } catch (e: Throwable) {
                 // ignore
