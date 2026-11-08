@@ -49,16 +49,17 @@ jobs:
           for f in app/build/outputs/apk/release/*.apk; do
             name=$(basename "$f" | sed -e 's/^app-//' -e 's/-release//')
             cp "$f" "out/ADMOSS-Downloader-$name"
+            (cd out && sha256sum "ADMOSS-Downloader-$name" | cut -d' ' -f1 > "ADMOSS-Downloader-$name.sha256")
           done
           ls -lh out
 
       - uses: actions/upload-artifact@v4
         with:
           name: ADMOSS-Downloader-APK
-          path: out/*.apk
+          path: out/*
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: out/*.apk
+          files: out/*

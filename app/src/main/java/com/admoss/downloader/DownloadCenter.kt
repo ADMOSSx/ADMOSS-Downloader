@@ -19,6 +19,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Size
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import java.net.HttpURLConnection
 import java.net.URL
@@ -60,6 +62,10 @@ class QueueItem(
 
     @Volatile
     var cancelled = false
+
+    /** Video info saved by the lookup, so yt-dlp does not have to fetch it a second time. */
+    @Volatile
+    var infoJsonPath: String? = null
 }
 
 /**
@@ -73,11 +79,7 @@ object DownloadCenter {
     var restoring by mutableStateOf(false)
     var restoreMessage by mutableStateOf<String?>(null)
 
-    @Volatile
-    private var currentPid: String? = null
-
-    @Volatile
-    private var currentItem: QueueItem? = null
+    private val pids = ConcurrentHashMap<Long, String>()
 
     private var loaded = false
     private var lastId = 0L
@@ -103,6 +105,15 @@ object DownloadCenter {
         queue.addAll(items)
     }
 
+    /** Takes the next waiting item and marks it as running, so two workers never take the same one. */
+    @Synchronized
+    fun claimNext(): QueueItem? {
+        val next = queue.firstOrNull { it.status == Status.WAITING } ?: return null
+        next.status = Status.DOWNLOADING
+        next.stage = "Starting…"
+        return next
+    }
+
     fun nextWaiting(): QueueItem? = queue.firstOrNull { it.status == Status.WAITING }
 
     fun hasWaiting(): Boolean = nextWaiting() != null
@@ -117,13 +128,11 @@ object DownloadCenter {
             Status.DOWNLOADING -> {
                 item.cancelled = true
                 item.stage = "Cancelling…"
-                if (currentItem === item) {
-                    currentPid?.let {
-                        try {
-                            YoutubeDL.getInstance().destroyProcessById(it)
-                        } catch (e: Throwable) {
-                            // ignore
-                        }
+                pids[item.id]?.let {
+                    try {
+                        YoutubeDL.getInstance().destroyProcessById(it)
+                    } catch (e: Throwable) {
+                        // ignore
                     }
                 }
             }
@@ -141,12 +150,14 @@ object DownloadCenter {
         }
     }
 
+    @Synchronized
     fun removePlaylist(ctx: Context, name: String) {
         history.filter { it.playlist == name }.forEach { deleteThumb(it) }
         history = history.filter { it.playlist != name }
         saveHistory(ctx)
     }
 
+    @Synchronized
     fun removeHistory(ctx: Context, item: HistoryItem) {
         deleteThumb(item)
         history = history.filter { it.uri != item.uri }
@@ -159,8 +170,7 @@ object DownloadCenter {
      */
     fun runItem(ctx: Context, item: QueueItem, onNotify: (Int, String) -> Unit): HistoryItem? {
         val id = "admoss-${item.id}"
-        currentPid = id
-        currentItem = item
+        pids[item.id] = id
         item.status = Status.DOWNLOADING
         item.stage = "Starting…"
         item.progress = 0f
@@ -185,14 +195,19 @@ object DownloadCenter {
                 return null
             }
 
+            // First try with the info the lookup already saved (no second lookup), then normally, then with the fallback
+            val jsonFile = item.infoJsonPath?.let { File(it) }?.takeIf { it.exists() }
+            val firstPlain = if (jsonFile != null) 1 else 0
             var attempt = 0
             var lastPct = -1
             while (true) {
                 val req = YoutubeDLRequest(item.url)
                 req.addOption("--no-playlist")
                 req.addOption("--no-mtime")
+                req.addOption("--concurrent-fragments", "4")
                 req.addOption("-o", "${tmp.absolutePath}/%(title).80s.%(ext)s")
-                if (attempt > 0) YtOptions.addFallback(req)
+                if (attempt == 0 && jsonFile != null) req.addOption("--load-info-json", jsonFile.absolutePath)
+                if (attempt > firstPlain) YtOptions.addFallback(req)
 
                 if (item.audio) {
                     req.addOption("-x")
@@ -238,7 +253,7 @@ object DownloadCenter {
                     }
                     break
                 } catch (e: Throwable) {
-                    if (item.cancelled || attempt >= 1 || !YtOptions.shouldRetry(e)) throw e
+                    if (item.cancelled || attempt >= firstPlain + 1 || !YtOptions.shouldRetry(e)) throw e
                     attempt++
                     item.stage = "Retrying…"
                     item.progress = 0f
@@ -269,8 +284,7 @@ object DownloadCenter {
                 out.nameWithoutExtension, uri.toString(), item.audio,
                 item.playlist, item.index, thumbPath, out.length()
             )
-            history = (listOf(saved) + history).take(500)
-            saveHistory(ctx)
+            addHistory(ctx, saved)
 
             item.progress = 1f
             item.stage = if (item.audio) "Saved to Music/ADMOSS" else "Saved to Movies/ADMOSS"
@@ -287,8 +301,8 @@ object DownloadCenter {
             }
         } finally {
             tmp.deleteRecursively()
-            currentPid = null
-            currentItem = null
+            item.infoJsonPath?.let { File(it).delete() }
+            pids.remove(item.id)
         }
         return result
     }
@@ -298,6 +312,8 @@ object DownloadCenter {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private class Found(val date: Long, val item: HistoryItem)
+    private class PhotoJob(val isMusic: Boolean, val index: Int, val url: String)
+    private class PhotoOut(val isMusic: Boolean, val index: Int, val uri: String, val bytes: Long)
 
     /** Looks in Movies/Music/Pictures ADMOSS for files this app saved before and adds them back. */
     fun restoreAsync(ctx: Context, silent: Boolean) {
@@ -454,13 +470,13 @@ object DownloadCenter {
             val h = f.item
             if (h.audio) h else h.copy(thumb = makeThumb(ctx, Uri.parse(h.uri), h.uri.substringAfterLast('/')))
         }
-        history = (items + history).take(500)
-        saveHistory(ctx)
+        mergeHistory(ctx, items)
         return items.size
     }
 
     // ---- playlist editing ----
 
+    @Synchronized
     fun renamePlaylist(ctx: Context, old: String, newName: String) {
         val n = newName.trim()
         if (n.isBlank() || n == old) return
@@ -470,6 +486,7 @@ object DownloadCenter {
         moveInBackground(ctx, affected, n)
     }
 
+    @Synchronized
     fun addToPlaylist(ctx: Context, name: String, uris: List<String>) {
         val n = name.trim()
         if (n.isBlank() || uris.isEmpty()) return
@@ -491,6 +508,7 @@ object DownloadCenter {
         moveInBackground(ctx, moved, n)
     }
 
+    @Synchronized
     fun removeFromPlaylist(ctx: Context, item: HistoryItem) {
         history = history.map { if (it.uri == item.uri) it.copy(playlist = null, index = 0) else it }
         saveHistory(ctx)
@@ -514,6 +532,29 @@ object DownloadCenter {
                 }
             }
         }
+    }
+
+    @Synchronized
+    private fun addHistory(ctx: Context, saved: HistoryItem) {
+        history = (listOf(saved) + history).take(500)
+        saveHistory(ctx)
+    }
+
+    @Synchronized
+    private fun mergeHistory(ctx: Context, items: List<HistoryItem>) {
+        val known = history.map { it.uri }.toSet()
+        history = (items.filter { it.uri !in known } + history).take(500)
+        saveHistory(ctx)
+    }
+
+    /** Removes items from the library after their files were deleted from the phone. */
+    @Synchronized
+    fun removeItems(ctx: Context, items: List<HistoryItem>) {
+        if (items.isEmpty()) return
+        items.forEach { deleteThumb(it) }
+        val uris = items.map { it.uri }.toSet()
+        history = history.filter { it.uri !in uris }
+        saveHistory(ctx)
     }
 
     // ---- TikTok photo posts ----
@@ -598,41 +639,37 @@ object DownloadCenter {
 
             val label = safeName(post.title, 40).ifBlank { "TikTok photos" }
             val folder = (label + " " + post.id.takeLast(5)).trim()
-            val imageUris = ArrayList<String>()
-            var bytes = 0L
-            var done = 0
+            // Up to 4 files at the same time: the pictures and the music
+            val doneCount = AtomicInteger(0)
+            val jobs = images.mapIndexed { i, u -> PhotoJob(false, i, u) } +
+                listOfNotNull(music?.let { PhotoJob(true, 0, it) })
 
-            for ((i, url) in images.withIndex()) {
-                if (item.cancelled) {
-                    item.status = Status.CANCELLED
-                    item.stage = "Cancelled"
-                    return null
+            val outs = jobs.parallelMap(4) { job ->
+                if (item.cancelled) return@parallelMap null
+                val out = if (job.isMusic) {
+                    val musicName = safeName(post.musicTitle.ifBlank { label }, 50).ifBlank { "TikTok music" }
+                    val file = downloadFile(job.url, File(tmp, "$musicName - TikTok"), "mp3")
+                    PhotoOut(true, 0, saveToMediaStore(ctx, file, true).toString(), file.length())
+                } else {
+                    val file = downloadFile(job.url, File(tmp, "photo_" + (job.index + 1).toString().padStart(2, '0')), "jpg")
+                    PhotoOut(false, job.index, saveImage(ctx, file, folder).toString(), file.length())
                 }
-                item.stage = "Photo ${i + 1} of ${images.size}"
-                onNotify(done * 100 / total, item.stage)
-                val file = downloadFile(url, File(tmp, "photo_" + (i + 1).toString().padStart(2, '0')), "jpg")
-                imageUris.add(saveImage(ctx, file, folder).toString())
-                bytes += file.length()
-                done += 1
-                item.progress = done / total.toFloat()
+                val d = doneCount.incrementAndGet()
+                item.progress = d / total.toFloat()
+                item.stage = if (images.isNotEmpty()) "Saving photos…  $d of $total" else "Music"
+                onNotify(d * 100 / total, item.stage)
+                out
             }
 
-            var musicUri: String? = null
-            if (music != null) {
-                if (item.cancelled) {
-                    item.status = Status.CANCELLED
-                    item.stage = "Cancelled"
-                    return null
-                }
-                item.stage = "Music"
-                onNotify(done * 100 / total, item.stage)
-                val musicName = safeName(post.musicTitle.ifBlank { label }, 50).ifBlank { "TikTok music" }
-                val file = downloadFile(music, File(tmp, "$musicName - TikTok"), "mp3")
-                musicUri = saveToMediaStore(ctx, file, true).toString()
-                bytes += file.length()
-                done += 1
-                item.progress = done / total.toFloat()
+            if (item.cancelled) {
+                item.status = Status.CANCELLED
+                item.stage = "Cancelled"
+                return null
             }
+            val finished = outs.filterNotNull()
+            val imageUris = finished.filter { !it.isMusic }.sortedBy { it.index }.map { it.uri }
+            val musicUri: String? = finished.firstOrNull { it.isMusic }?.uri
+            val bytes = finished.sumOf { it.bytes }
 
             val coverUrl = images.firstOrNull() ?: post.images.firstOrNull()
             val thumbPath = saveThumb(ctx, coverUrl, item.id)
@@ -649,8 +686,7 @@ object DownloadCenter {
                 photoUris = imageUris,
                 musicUri = musicUri
             )
-            history = (listOf(saved) + history).take(500)
-            saveHistory(ctx)
+            addHistory(ctx, saved)
 
             item.progress = 1f
             item.stage = when {
@@ -671,6 +707,7 @@ object DownloadCenter {
             }
         } finally {
             tmp.deleteRecursively()
+            pids.remove(item.id)
         }
         return result
     }
@@ -779,6 +816,7 @@ object DownloadCenter {
         emptyList()
     }
 
+    @Synchronized
     private fun saveHistory(ctx: Context) {
         val arr = JSONArray()
         history.forEach {

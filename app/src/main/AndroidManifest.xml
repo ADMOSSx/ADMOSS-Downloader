@@ -42,6 +42,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Checks GitHub for a new release every 12 hours (can be turned off in Settings) -->
+        <service
+            android:name=".UpdateCheckJobService"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <!-- Keeps downloads running when the app is in the background -->
         <service
             android:name=".DownloadService"

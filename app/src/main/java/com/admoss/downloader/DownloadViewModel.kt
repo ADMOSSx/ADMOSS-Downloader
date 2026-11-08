@@ -15,11 +15,17 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import java.net.HttpURLConnection
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.net.URL
 
 class DownloadViewModel(app: Application) : AndroidViewModel(app) {
@@ -54,7 +60,37 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     @Volatile
     private var sizeCancelled = false
-    private var sizePid: String? = null
+    private val sizePids = ConcurrentHashMap.newKeySet<String>()
+    private val sizeLock = Any()
+
+    // The raw yt-dlp info of videos we already looked up. A download reuses it (--load-info-json),
+    // so yt-dlp does not have to ask YouTube / TikTok a second time.
+    private val rawCache = ConcurrentHashMap<String, String>()
+    private val rawTime = ConcurrentHashMap<String, Long>()
+
+    private fun rememberRaw(url: String, raw: String) {
+        if (rawCache.size > 40) {
+            rawCache.clear()
+            rawTime.clear()
+        }
+        rawCache[url] = raw
+        rawTime[url] = System.currentTimeMillis()
+    }
+
+    /** Saves the remembered info of [url] to a file for the download, if it is still fresh (links expire). */
+    private fun saveInfoJson(url: String, id: Long): String? {
+        val raw = rawCache[url] ?: return null
+        val age = System.currentTimeMillis() - (rawTime[url] ?: 0L)
+        if (age > 2L * 60L * 60L * 1000L) return null
+        return try {
+            val dir = File(ctx.cacheDir, "info").apply { mkdirs() }
+            val f = File(dir, "$id.json")
+            f.writeText(raw.substring(raw.indexOf('{').coerceAtLeast(0)))
+            f.absolutePath
+        } catch (e: Throwable) {
+            null
+        }
+    }
 
     // ---- TikTok photo post (pictures + music) ----
     var photo by mutableStateOf<PhotoPost?>(null)
@@ -243,6 +279,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         if (seq != infoSeq) return
 
         val parsed = InfoParser.parse(raw)
+        rememberRaw(url, raw)
         val bmp = thumb ?: loadThumb(parsed.thumbnailUrl)
         if (seq != infoSeq) return
 
@@ -312,7 +349,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     fun sizeOf(url: String): Long =
         playlistInfos[url]?.let { estimateSize(it, audioOnly, quality) } ?: 0L
 
-    /** Looks up every selected video one by one and adds up the estimated sizes. */
+    /** Looks up the selected videos, three at a time, and adds up the estimated sizes. */
     fun calculatePlaylistSize() {
         val pl = playlist ?: return
         if (sizeRunning || !Engine.ready) return
@@ -327,47 +364,56 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
         val seq = infoSeq
 
         viewModelScope.launch(Dispatchers.IO) {
-            var failures = 0
+            val gate = Semaphore(3)
+            val failures = AtomicInteger(0)
             try {
-                for (url in urls) {
-                    if (sizeCancelled || seq != infoSeq) break
-                    try {
-                        val pid = "size-${System.nanoTime()}"
-                        sizePid = pid
-                        val raw = try {
-                            runJson(url, pid, false, false)
-                        } catch (e: Throwable) {
-                            if (sizeCancelled || !YtOptions.shouldRetry(e)) throw e
-                            val pid2 = "$pid-b"
-                            sizePid = pid2
-                            runJson(url, pid2, false, true)
+                coroutineScope {
+                    urls.map { url ->
+                        async {
+                            gate.withPermit {
+                                if (sizeCancelled || seq != infoSeq) return@withPermit
+                                var pid = "size-${System.nanoTime()}"
+                                sizePids.add(pid)
+                                try {
+                                    val raw = try {
+                                        runJson(url, pid, false, false)
+                                    } catch (e: Throwable) {
+                                        if (sizeCancelled || !YtOptions.shouldRetry(e)) throw e
+                                        sizePids.remove(pid)
+                                        pid = "$pid-b"
+                                        sizePids.add(pid)
+                                        runJson(url, pid, false, true)
+                                    }
+                                    val parsed = InfoParser.parse(raw)
+                                    rememberRaw(url, raw)
+                                    if (!sizeCancelled && seq == infoSeq) {
+                                        synchronized(sizeLock) { playlistInfos = playlistInfos + (url to parsed) }
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Throwable) {
+                                    if (!sizeCancelled && failures.incrementAndGet() >= 5) {
+                                        sizeNote = "Stopped after several errors. Try again later."
+                                        sizeCancelled = true
+                                    }
+                                } finally {
+                                    sizePids.remove(pid)
+                                }
+                                synchronized(sizeLock) { sizeChecked += 1 }
+                            }
                         }
-                        val parsed = InfoParser.parse(raw)
-                        if (!sizeCancelled && seq == infoSeq) playlistInfos = playlistInfos + (url to parsed)
-                        failures = 0
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        if (sizeCancelled) break
-                        failures += 1
-                        if (failures >= 5) {
-                            sizeNote = "Stopped after 5 errors in a row. Try again later."
-                            break
-                        }
-                    }
-                    sizeChecked += 1
-                    delay(250)
+                    }.awaitAll()
                 }
             } finally {
                 sizeRunning = false
-                sizePid = null
+                sizePids.clear()
             }
         }
     }
 
     fun cancelSizeCalc() {
         sizeCancelled = true
-        sizePid?.let {
+        sizePids.toList().forEach {
             try {
                 YoutubeDL.getInstance().destroyProcessById(it)
             } catch (e: Throwable) {
@@ -409,7 +455,7 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun applyPhoto(post: PhotoPost, seq: Int) {
         if (seq != infoSeq) return
-        val previews = post.images.take(6).mapNotNull { loadThumb(it, 4) }
+        val previews = post.images.take(6).parallelMap(6) { loadThumb(it, 4) }.filterNotNull()
         if (seq != infoSeq) return
 
         info = null
@@ -492,10 +538,16 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
                 message = "Select at least one video"
                 return
             }
-            chosen.map { newItem(it.value.url, it.value.title, pl.title, it.index, youtubeThumb(it.value.url)) }
+            chosen.map {
+                val q = newItem(it.value.url, it.value.title, pl.title, it.index, youtubeThumb(it.value.url))
+                q.infoJsonPath = saveInfoJson(it.value.url, q.id)
+                q
+            }
         } else {
             val title = info?.title ?: url.removePrefix("https://").removePrefix("http://").take(40)
-            listOf(newItem(url, title, null, 0, youtubeThumb(url) ?: info?.thumbnailUrl))
+            val single = newItem(url, title, null, 0, youtubeThumb(url) ?: info?.thumbnailUrl)
+            single.infoJsonPath = saveInfoJson(url, single.id)
+            listOf(single)
         }
 
         DownloadCenter.enqueue(items)

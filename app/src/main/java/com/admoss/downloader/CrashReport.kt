@@ -14,6 +14,8 @@ class AdmossApp : Application() {
         DownloadCenter.init(this)
         Engine.start(this)
         Updater.init()
+        AppSettings.init(this)
+        UpdateScheduler.apply(this)
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try {

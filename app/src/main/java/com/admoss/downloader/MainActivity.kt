@@ -3,6 +3,7 @@
 package com.admoss.downloader
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,6 +14,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -61,6 +63,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -149,7 +153,7 @@ class MainActivity : ComponentActivity() {
         ThemeSettings.load(this)
         if (savedInstanceState == null) {
             handleIntent(intent)
-            Updater.check(this, false)
+            if (AppSettings.autoUpdateEnabled(this)) Updater.check(this, false)
         }
         setContent { AdmossRoot { vm } }
     }
@@ -312,7 +316,11 @@ private fun AdmossApp(vm: DownloadViewModel) {
                 .fillMaxWidth()
                 .statusBarsPadding()
         ) {
-            if (tab == 0) DownloadTab(vm) else LibraryTab()
+            when (tab) {
+                0 -> DownloadTab(vm)
+                1 -> LibraryTab()
+                else -> SettingsTab()
+            }
         }
         BottomBar(tab) { tab = it }
     }
@@ -334,6 +342,9 @@ private fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
         }
         NavItem("Library", R.drawable.ic_library, selected == 1, 0, Modifier.weight(1f)) {
             onSelect(1)
+        }
+        NavItem("Settings", R.drawable.ic_settings, selected == 2, 0, Modifier.weight(1f)) {
+            onSelect(2)
         }
     }
 }
@@ -482,18 +493,19 @@ private fun UpdateArea() {
     val context = LocalContext.current
     val info = Updater.available
     val msg = Updater.message
+    var expanded by remember { mutableStateOf(false) }
 
     if (info != null) {
         GlassCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(p.accent),
                     contentAlignment = Alignment.Center
                 ) {
-                    Ico(R.drawable.ic_download, p.onAccent, 24.dp)
+                    Ico(R.drawable.ic_download, p.onAccent, 22.dp)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -502,6 +514,25 @@ private fun UpdateArea() {
                     Text("Version ${info.version}$sizeText", color = p.sub, fontSize = 13.sp)
                 }
             }
+
+            if (info.notes.isNotBlank()) {
+                Spacer(Modifier.height(12.dp))
+                Text("What's new", color = p.sub, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    info.notes,
+                    color = p.text,
+                    fontSize = 13.sp,
+                    maxLines = if (expanded) Int.MAX_VALUE else 6,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (info.notes.lines().size > 6 || info.notes.length > 320) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Show less" else "Show more", color = p.accent)
+                    }
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
             if (Updater.downloading) {
                 LinearProgressIndicator(
@@ -515,7 +546,7 @@ private fun UpdateArea() {
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Downloading update…  ${(Updater.progress * 100).toInt()}%",
+                    if (Updater.progress >= 1f) Updater.stage else "${Updater.stage}  ${(Updater.progress * 100).toInt()}%",
                     color = p.sub,
                     fontSize = 12.sp
                 )
@@ -533,7 +564,7 @@ private fun UpdateArea() {
                         Text(
                             "Update now",
                             color = p.onAccent,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             fontSize = 14.sp
                         )
                     }
@@ -541,6 +572,12 @@ private fun UpdateArea() {
                         Text("Later", color = p.sub)
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Android will ask you to confirm before it installs. Your downloads and settings are kept.",
+                    color = p.sub,
+                    fontSize = 11.sp
+                )
             }
             if (msg != null) {
                 Spacer(Modifier.height(8.dp))
@@ -562,6 +599,169 @@ private fun UpdateArea() {
             Ico(R.drawable.ic_refresh, p.accent, 22.dp)
             Spacer(Modifier.width(12.dp))
             Text(msg, color = p.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun SettingsHeading(text: String) {
+    val p = LocalPalette.current
+    Text(
+        text,
+        color = p.sub,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 8.dp)
+    )
+}
+
+@Composable
+private fun SettingsTab() {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Settings", color = p.text, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+        }
+
+        item { SettingsHeading("Updates") }
+        item {
+            GlassCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Check for updates automatically", color = p.text, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Looks for a new release on GitHub when the app opens and every 12 hours.",
+                            color = p.sub,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = AppSettings.autoUpdate,
+                        onCheckedChange = { AppSettings.setAutoUpdate(context, it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = p.onAccent,
+                            checkedTrackColor = p.accent
+                        )
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                Text("Installed version: ${BuildConfig.VERSION_NAME}", color = p.text, fontSize = 14.sp)
+                val last = AppSettings.lastUpdateCheck
+                Text(
+                    if (last > 0L) {
+                        "Last checked: " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(last))
+                    } else {
+                        "Not checked yet"
+                    },
+                    color = p.sub,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (Updater.checking) p.border else p.accent)
+                        .clickable(enabled = !Updater.checking) { Updater.check(context, true) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (Updater.checking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = p.text
+                            )
+                            Spacer(Modifier.width(10.dp))
+                        }
+                        Text(
+                            if (Updater.checking) "Checking…" else "Check for updates now",
+                            color = if (Updater.checking) p.text else p.onAccent,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+        }
+        if (Updater.available != null || Updater.message != null) {
+            item { UpdateArea() }
+        }
+
+        item { SettingsHeading("Downloads") }
+        item {
+            GlassCard {
+                Text("Downloads at the same time", color = p.text, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "More at once is faster, but uses more data and battery at the same moment.",
+                    color = p.sub,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(1, 2, 3).forEach { n ->
+                        val on = AppSettings.parallel == n
+                        val shape = RoundedCornerShape(10.dp)
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(shape)
+                                .background(if (on) p.accent else Color.Transparent)
+                                .border(1.dp, if (on) p.accent else p.border, shape)
+                                .clickable { AppSettings.setParallel(context, n) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "$n",
+                                color = if (on) p.onAccent else p.text,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item { SettingsHeading("Storage") }
+        item {
+            GlassCard {
+                Text("Where your files are saved", color = p.text, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Videos: Movies/ADMOSS\nMusic: Music/ADMOSS\nPhotos: Pictures/ADMOSS",
+                    color = p.sub,
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Deleting a download in the Library also deletes the file from your phone, after you confirm.",
+                    color = p.sub,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        item { SettingsHeading("About") }
+        item {
+            GlassCard {
+                Text("ADMOSS Downloader ${BuildConfig.VERSION_NAME}", color = p.text, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                if (BuildConfig.UPDATE_REPO.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text("github.com/${BuildConfig.UPDATE_REPO}", color = p.sub, fontSize = 12.sp)
+                }
+            }
         }
     }
 }
@@ -1543,6 +1743,25 @@ private fun LibraryTab() {
     var openName by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var showNew by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmDelete by remember { mutableStateOf<List<HistoryItem>?>(null) }
+    val selecting = selected.isNotEmpty()
+
+    // Android may ask the user to confirm before it deletes files from an earlier install
+    val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        DeleteController.onRequestResult(context, r.resultCode == Activity.RESULT_OK)
+    }
+    val pendingRequest = DeleteController.pendingRequest
+    LaunchedEffect(pendingRequest) {
+        if (pendingRequest != null) deleteLauncher.launch(IntentSenderRequest.Builder(pendingRequest).build())
+    }
+    val deleteMessage = DeleteController.message
+    LaunchedEffect(deleteMessage) {
+        if (deleteMessage != null) {
+            Toast.makeText(context, deleteMessage, Toast.LENGTH_LONG).show()
+            DeleteController.message = null
+        }
+    }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result.values.any { it }) {
@@ -1560,6 +1779,7 @@ private fun LibraryTab() {
     }
 
     BackHandler(enabled = openName != null) { openName = null }
+    BackHandler(enabled = selecting) { selected = emptySet() }
 
     val name = openName
     if (name != null) {
@@ -1587,25 +1807,72 @@ private fun LibraryTab() {
             )
         }
 
+        confirmDelete?.let { list ->
+            DeleteDialog(
+                items = list,
+                onDeleteFiles = {
+                    DeleteController.delete(context, list)
+                    confirmDelete = null
+                    selected = emptySet()
+                },
+                onRemoveFromList = {
+                    list.forEach { DownloadCenter.removeHistory(context, it) }
+                    confirmDelete = null
+                    selected = emptySet()
+                },
+                onDismiss = { confirmDelete = null }
+            )
+        }
+
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Library",
-                        color = p.text,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 24.sp,
-                        modifier = Modifier.weight(1f)
+                if (selecting) {
+                    val picked = all.filter { it.uri in selected }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { selected = emptySet() }) {
+                            Ico(R.drawable.ic_close, p.text, 22.dp, "Cancel selection")
+                        }
+                        Text(
+                            "${selected.size} selected",
+                            color = p.text,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { selected = all.map { it.uri }.toSet() }) {
+                            Text("Select all", color = p.accent)
+                        }
+                        IconButton(onClick = { if (picked.isNotEmpty()) confirmDelete = picked }) {
+                            Ico(R.drawable.ic_delete, Pink, 24.dp, "Delete selected")
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Library",
+                            color = p.text,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 24.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = {
+                            if (hasMediaPermission(context)) DownloadCenter.restoreAsync(context, false)
+                            else permLauncher.launch(mediaPermissions())
+                        }) {
+                            Ico(R.drawable.ic_restore, p.text, 22.dp, "Find my saved files")
+                        }
+                        IconButton(onClick = { gridView = !gridView }) {
+                            Ico(if (gridView) R.drawable.ic_list else R.drawable.ic_grid, p.text, 22.dp, "Change view")
+                        }
+                    }
+                }
+                if (DeleteController.busy) {
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = p.accent,
+                        trackColor = p.border
                     )
-                    IconButton(onClick = {
-                        if (hasMediaPermission(context)) DownloadCenter.restoreAsync(context, false)
-                        else permLauncher.launch(mediaPermissions())
-                    }) {
-                        Ico(R.drawable.ic_restore, p.text, 22.dp, "Find my saved files")
-                    }
-                    IconButton(onClick = { gridView = !gridView }) {
-                        Ico(if (gridView) R.drawable.ic_list else R.drawable.ic_grid, p.text, 22.dp, "Change view")
-                    }
                 }
 
                 val sizeText = totalSizeText(all)
@@ -1702,7 +1969,11 @@ private fun LibraryTab() {
                     gridView = gridView,
                     query = query,
                     onOpenPlaylist = { openName = it },
-                    onNewPlaylist = { showNew = true }
+                    onNewPlaylist = { showNew = true },
+                    selected = selected,
+                    onToggle = { uri -> selected = if (uri in selected) selected - uri else selected + uri },
+                    onLongPress = { uri -> selected = selected + uri },
+                    onAskDelete = { confirmDelete = listOf(it) }
                 )
             }
         }
@@ -1715,21 +1986,33 @@ private fun LibraryPage(
     gridView: Boolean,
     query: String,
     onOpenPlaylist: (String) -> Unit,
-    onNewPlaylist: () -> Unit
+    onNewPlaylist: () -> Unit,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    onLongPress: (String) -> Unit,
+    onAskDelete: (HistoryItem) -> Unit
 ) {
     val p = LocalPalette.current
     val context = LocalContext.current
     val all = DownloadCenter.history
-    val groups = all.filter { it.playlist != null }.groupBy { it.playlist ?: "" }
-    val groupNames = groups.keys.toList().filter { query.isBlank() || it.contains(query, ignoreCase = true) }
-    val base = when (category) {
-        1 -> all.filter { !it.audio && it.photoUris.isEmpty() }
-        2 -> all.filter { it.audio && it.photoUris.isEmpty() }
-        3 -> all.filter { it.photoUris.isNotEmpty() }
-        4 -> emptyList()
-        else -> all
+    // Worked out again only when the list or the search text changes, so scrolling stays smooth
+    val groups = remember(all) { all.filter { it.playlist != null }.groupBy { it.playlist ?: "" } }
+    val groupNames = remember(groups, query) {
+        groups.keys.toList().filter { query.isBlank() || it.contains(query, ignoreCase = true) }
     }
-    val shown = if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
+    val base = remember(all, category) {
+        when (category) {
+            1 -> all.filter { !it.audio && it.photoUris.isEmpty() }
+            2 -> all.filter { it.audio && it.photoUris.isEmpty() }
+            3 -> all.filter { it.photoUris.isNotEmpty() }
+            4 -> emptyList()
+            else -> all
+        }
+    }
+    val shown = remember(base, query) {
+        if (query.isBlank()) base else base.filter { it.title.contains(query, ignoreCase = true) }
+    }
+    val selecting = selected.isNotEmpty()
 
     LazyVerticalGrid(
         columns = GridCells.Fixed(if (gridView) 2 else 1),
@@ -1799,10 +2082,26 @@ private fun LibraryPage(
                     if (entry.photoUris.isNotEmpty()) openPhotos(context, entry)
                     else playItems(context, listOf(entry), 0)
                 }
+                val isSelected = entry.uri in selected
+                val click = { if (selecting) onToggle(entry.uri) else open() }
                 if (gridView) {
-                    MediaGridCard(entry, onOpen = open, onRemove = { DownloadCenter.removeHistory(context, entry) })
+                    MediaGridCard(
+                        entry,
+                        onOpen = click,
+                        onRemove = { onAskDelete(entry) },
+                        selected = isSelected,
+                        selecting = selecting,
+                        onLongClick = { onLongPress(entry.uri) }
+                    )
                 } else {
-                    HistoryRow(entry, onOpen = open, onRemove = { DownloadCenter.removeHistory(context, entry) })
+                    HistoryRow(
+                        entry,
+                        onOpen = click,
+                        onRemove = { onAskDelete(entry) },
+                        selected = isSelected,
+                        selecting = selecting,
+                        onLongClick = { onLongPress(entry.uri) }
+                    )
                 }
             }
         }
@@ -1810,16 +2109,23 @@ private fun LibraryPage(
 }
 
 @Composable
-private fun MediaGridCard(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Unit) {
+private fun MediaGridCard(
+    item: HistoryItem,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit,
+    selected: Boolean = false,
+    selecting: Boolean = false,
+    onLongClick: () -> Unit = {}
+) {
     val p = LocalPalette.current
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(12.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(p.card)
-            .border(1.dp, p.border, shape)
-            .clickable { onOpen() }
+            .background(if (selected) p.accent.copy(alpha = 0.14f) else p.card)
+            .border(if (selected) 2.dp else 1.dp, if (selected) p.accent else p.border, shape)
+            .combinedClickable(onClick = onOpen, onLongClick = onLongClick)
     ) {
         Box(
             Modifier
@@ -1827,17 +2133,31 @@ private fun MediaGridCard(item: HistoryItem, onOpen: () -> Unit, onRemove: () ->
                 .aspectRatio(16f / 9f)
         ) {
             Thumb(item.thumb, Modifier.fillMaxSize(), itemIcon(item), 28.dp)
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.55f))
-                    .clickable { onRemove() },
-                contentAlignment = Alignment.Center
-            ) {
-                Ico(R.drawable.ic_close, Color.White, 16.dp, "Remove from list")
+            if (selecting) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) p.accent else Color.Black.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (selected) Ico(R.drawable.ic_check, p.onAccent, 18.dp)
+                }
+            } else {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .clickable { onRemove() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Ico(R.drawable.ic_delete, Color.White, 17.dp, "Delete")
+                }
             }
         }
         Column(Modifier.padding(10.dp)) {
@@ -2005,6 +2325,7 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
     val videos = all.filter { it.playlist == name }.sortedBy { it.index }
     var showRename by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
+    var showDelete by remember { mutableStateOf(false) }
 
     if (showRename) {
         RenameDialog(
@@ -2028,6 +2349,23 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
                 showAdd = false
             },
             onDismiss = { showAdd = false }
+        )
+    }
+
+    if (showDelete) {
+        DeleteDialog(
+            items = videos,
+            onDeleteFiles = {
+                showDelete = false
+                DeleteController.delete(context, videos)
+                onBack()
+            },
+            onRemoveFromList = {
+                showDelete = false
+                DownloadCenter.removePlaylist(context, name)
+                onBack()
+            },
+            onDismiss = { showDelete = false }
         )
     }
 
@@ -2153,11 +2491,18 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
         }
 
         item {
-            TextButton(onClick = {
-                DownloadCenter.removePlaylist(context, name)
-                onBack()
-            }) {
-                Text("Remove this playlist from the list", color = Pink)
+            Column {
+                TextButton(onClick = {
+                    DownloadCenter.removePlaylist(context, name)
+                    onBack()
+                }) {
+                    Text("Remove this playlist from the list", color = p.sub)
+                }
+                if (videos.isNotEmpty()) {
+                    TextButton(onClick = { showDelete = true }) {
+                        Text("Delete all files in this playlist", color = Pink)
+                    }
+                }
             }
         }
     }
@@ -2224,16 +2569,23 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
 }
 
 @Composable
-private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Unit) {
+private fun HistoryRow(
+    item: HistoryItem,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit,
+    selected: Boolean = false,
+    selecting: Boolean = false,
+    onLongClick: () -> Unit = {}
+) {
     val p = LocalPalette.current
     val shape = RoundedCornerShape(12.dp)
     Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(p.card)
-            .border(1.dp, p.border, shape)
-            .clickable { onOpen() }
+            .background(if (selected) p.accent.copy(alpha = 0.14f) else p.card)
+            .border(if (selected) 2.dp else 1.dp, if (selected) p.accent else p.border, shape)
+            .combinedClickable(onClick = onOpen, onLongClick = onLongClick)
             .padding(start = 10.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2243,7 +2595,7 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
                 .width(96.dp)
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(10.dp)),
-            if (item.photoUris.isNotEmpty()) R.drawable.ic_photo else if (item.audio) R.drawable.ic_music else R.drawable.ic_play,
+            itemIcon(item),
             24.dp
         )
         Spacer(Modifier.width(12.dp))
@@ -2256,24 +2608,64 @@ private fun HistoryRow(item: HistoryItem, onOpen: () -> Unit, onRemove: () -> Un
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            val kind = when {
-                item.photoUris.isNotEmpty() -> {
-                    val n = item.photoUris.size
-                    (if (n == 1) "1 photo" else "$n photos") + if (item.musicUri != null) " + music" else ""
-                }
-                item.audio -> "Audio"
-                else -> "Video"
-            }
-            Text(
-                if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
-                color = p.sub,
-                fontSize = 11.sp
-            )
+            Text(itemMeta(item), color = p.sub, fontSize = 11.sp)
         }
-        IconButton(onClick = onRemove) {
-            Ico(R.drawable.ic_delete, p.sub, 20.dp, "Remove from list")
+        if (selecting) {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = null,
+                colors = CheckboxDefaults.colors(
+                    checkedColor = p.accent,
+                    uncheckedColor = p.sub,
+                    checkmarkColor = p.onAccent
+                )
+            )
+            Spacer(Modifier.width(8.dp))
+        } else {
+            IconButton(onClick = onRemove) {
+                Ico(R.drawable.ic_delete, p.sub, 20.dp, "Delete")
+            }
         }
     }
+}
+
+/** Asks before anything is deleted. "Delete" removes the files from the phone itself. */
+@Composable
+private fun DeleteDialog(
+    items: List<HistoryItem>,
+    onDeleteFiles: () -> Unit,
+    onRemoveFromList: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val p = LocalPalette.current
+    val many = items.size > 1
+    val files = items.sumOf { if (it.photoUris.isNotEmpty()) it.photoUris.size + (if (it.musicUri != null) 1 else 0) else 1 }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (many) "Delete ${items.size} items?" else "Delete this item?") },
+        text = {
+            Column {
+                Text(
+                    if (many) "These $files files will be deleted from your phone."
+                    else "\"${cutText(items[0].title, 60)}\" will be deleted from your phone.",
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Text("You can't undo this.", color = p.sub, fontSize = 13.sp)
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = onRemoveFromList) {
+                    Text("Only remove from the list", color = p.accent)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDeleteFiles) {
+                Text("Delete", color = Pink, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 private fun openItem(context: Context, item: HistoryItem) {

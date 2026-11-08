@@ -14,12 +14,15 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
 
-/** Works through the download queue as a foreground service, so it keeps going when you leave the app. */
+/**
+ * Works through the download queue as a foreground service, so it keeps going when you leave the app.
+ * Up to 3 downloads run at the same time (chosen in Settings).
+ */
 class DownloadService : Service() {
 
     companion object {
@@ -33,8 +36,17 @@ class DownloadService : Service() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var job: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    private val running = AtomicInteger(0)   // workers alive right now
+    private val doneCount = AtomicInteger(0)
+    private val failedCount = AtomicInteger(0)
+
+    @Volatile
+    private var lastDone: HistoryItem? = null
+
+    @Volatile
+    private var lastError: String? = null
 
     @Volatile
     private var lastStartId = 0
@@ -57,7 +69,7 @@ class DownloadService : Service() {
 
         if (intent?.action == ACTION_CANCEL_ALL) {
             DownloadCenter.cancelAll()
-            if (job?.isActive != true) stopSelf()
+            if (running.get() == 0) stopSelf()
             return START_NOT_STICKY
         }
 
@@ -68,7 +80,8 @@ class DownloadService : Service() {
             buildProgress(first?.title ?: "ADMOSS Downloader", "", 0, "Starting…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         )
-        launchWorker()
+        acquireWakeLock()
+        spawnWorkers()
         return START_NOT_STICKY
     }
 
@@ -78,64 +91,76 @@ class DownloadService : Service() {
         super.onDestroy()
     }
 
-    // ---- worker ----
+    // ---- workers ----
 
-    private fun launchWorker() {
-        if (job?.isActive == true) return
-        acquireWakeLock()
-
-        job = scope.launch {
-            var processed = 0
-            var done = 0
-            var failed = 0
-            var lastDone: HistoryItem? = null
-            var lastError: String? = null
-            val nm = getSystemService(NotificationManager::class.java)
-
-            try {
-                while (true) {
-                    // Work through everything that is waiting
-                    while (true) {
-                        val item = DownloadCenter.nextWaiting() ?: break
-                        val waitingAfter = DownloadCenter.queue.count { it.status == Status.WAITING } - 1
-                        val total = processed + 1 + waitingAfter
-                        val label = if (total > 1) "${processed + 1} of $total" else ""
-
-                        nm.notify(NOTIF_PROGRESS, buildProgress(item.title, label, 0, "Starting…"))
-                        val saved = DownloadCenter.runItem(applicationContext, item) { pct, stage ->
-                            nm.notify(NOTIF_PROGRESS, buildProgress(item.title, label, pct, stage))
-                        }
-                        processed++
-                        when (item.status) {
-                            Status.DONE -> {
-                                done++
-                                lastDone = saved
-                            }
-                            Status.FAILED -> {
-                                failed++
-                                lastError = item.error
-                            }
-                            else -> {}
-                        }
-                    }
-
-                    // Nothing left. Stop, unless a new request arrived in the meantime.
-                    val sid = lastStartId
-                    if (DownloadCenter.hasWaiting()) continue
-                    showSummary(done, failed, lastDone, lastError)
-                    done = 0
-                    failed = 0
-                    lastDone = null
-                    lastError = null
-                    if (stopSelfResult(sid)) break
+    /** Starts as many workers as allowed (and needed). Safe to call again when new items arrive. */
+    private fun spawnWorkers() {
+        val limit = AppSettings.parallelNow(applicationContext)
+        while (DownloadCenter.hasWaiting() && running.get() < limit) {
+            running.incrementAndGet()
+            scope.launch {
+                try {
+                    workerLoop()
+                } finally {
+                    if (running.decrementAndGet() == 0) finishRound()
                 }
-            } finally {
-                releaseWakeLock()
             }
         }
     }
 
+    private fun workerLoop() {
+        while (true) {
+            val item = DownloadCenter.claimNext() ?: break
+            val saved = DownloadCenter.runItem(applicationContext, item) { _, _ -> updateNotification() }
+            when (item.status) {
+                Status.DONE -> {
+                    doneCount.incrementAndGet()
+                    lastDone = saved
+                }
+                Status.FAILED -> {
+                    failedCount.incrementAndGet()
+                    lastError = item.error
+                }
+                else -> {}
+            }
+            updateNotification()
+        }
+    }
+
+    /** The last worker has no more work. Stop, unless something new arrived in the meantime. */
+    private fun finishRound() {
+        val sid = lastStartId
+        if (DownloadCenter.hasWaiting()) {
+            spawnWorkers()
+            return
+        }
+        showSummary(doneCount.getAndSet(0), failedCount.getAndSet(0), lastDone, lastError)
+        lastDone = null
+        lastError = null
+        if (stopSelfResult(sid)) {
+            releaseWakeLock()
+        } else {
+            spawnWorkers() // a new request arrived while finishing
+        }
+    }
+
     // ---- notifications ----
+
+    private fun updateNotification() {
+        val queue = DownloadCenter.queue.toList()
+        val active = queue.filter { it.status == Status.DOWNLOADING }
+        val waiting = queue.count { it.status == Status.WAITING }
+        val title = when {
+            active.isEmpty() -> "ADMOSS Downloader"
+            active.size == 1 -> active[0].title
+            else -> "${active.size} downloads running"
+        }
+        val pct = if (active.isEmpty()) 0 else (active.map { it.progress }.average() * 100).toInt()
+        val stage = if (active.size == 1) active[0].stage else "Downloading…"
+        val label = if (waiting > 0) "$waiting waiting" else ""
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIF_PROGRESS, buildProgress(title, label, pct, stage))
+    }
 
     private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
         this, 0,
@@ -205,6 +230,7 @@ class DownloadService : Service() {
     // ---- wake lock ----
 
     private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "admoss:download").apply {
             acquire(3 * 60 * 60 * 1000L)

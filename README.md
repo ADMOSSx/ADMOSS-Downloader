@@ -56,7 +56,7 @@
 | 🔔 | **Background downloads** with a notification (progress, cancel) |
 | 🔎 | **Library search** |
 | 🌗 | **Dark and light** themes |
-| 🔄 | **In-app updates**: new versions install over the old one |
+| 🔄 | **Automatic updates from GitHub**: the app notices a new release, shows the version and release notes, downloads it with progress, checks the file (size, SHA-256, same app, same signing key) and opens Android's own installer. Your downloads and settings are kept |
 | 🛡️ | Automatic **second try** with different network settings when YouTube blocks the first one |
 
 ---
