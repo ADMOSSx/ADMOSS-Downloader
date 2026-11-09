@@ -10,23 +10,50 @@ import java.io.File
 class AdmossApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Create the shared state objects here (outside Compose) and start the engine early
-        DownloadCenter.init(this)
-        Engine.start(this)
-        Updater.init()
-        AppSettings.init(this)
-        UpdateScheduler.apply(this)
+
+        // Install the handler BEFORE initializing anything that could fail during startup.
+        // Keep the current startup stage so the next-launch report points to the failing area.
+        var startupStage = "Application.onCreate"
         val previous = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try {
-                val text = "Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n" +
-                    "Thread: ${t.name}\n\n" + Log.getStackTraceString(e)
-                File(filesDir, "last_crash.txt").writeText(text.take(6000))
-            } catch (ignored: Throwable) {
-                // ignore
+                val report = buildString {
+                    appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                    appendLine("Startup stage: $startupStage")
+                    appendLine("Thread: ${thread.name}")
+                    appendLine()
+                    append(Log.getStackTraceString(error))
+                }
+                File(filesDir, "last_crash.txt").writeText(report.take(12000))
+            } catch (loggingError: Throwable) {
+                Log.e("ADMOSS-Crash", "Could not save crash report", loggingError)
             }
-            previous?.uncaughtException(t, e)
+
+            // Preserve Android's normal crash handling.
+            if (previous != null) {
+                previous.uncaughtException(thread, error)
+            } else {
+                Log.e("ADMOSS-Crash", "Uncaught exception", error)
+            }
         }
+
+        // Startup helpers are isolated: an optional scheduler or engine initialization
+        // failure must not prevent Android from opening the main screen.
+        fun initialize(stage: String, action: () -> Unit) {
+            startupStage = stage
+            try {
+                action()
+            } catch (error: Throwable) {
+                Log.e("ADMOSS-Startup", "Initialization failed at: $stage", error)
+            }
+        }
+
+        initialize("DownloadCenter.init") { DownloadCenter.init(this) }
+        initialize("Engine.start") { Engine.start(this) }
+        initialize("Updater.init") { Updater.init() }
+        initialize("AppSettings.init") { AppSettings.init(this) }
+        initialize("UpdateScheduler.apply") { UpdateScheduler.apply(this) }
+        startupStage = "Application startup completed"
     }
 }
 
