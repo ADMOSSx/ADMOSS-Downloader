@@ -145,11 +145,11 @@ class MainActivity : ComponentActivity() {
     private val vm: DownloadViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
-        super.onCreate(savedInstanceState)
         ThemeSettings.load(this)
         if (savedInstanceState == null) {
             handleIntent(intent)
