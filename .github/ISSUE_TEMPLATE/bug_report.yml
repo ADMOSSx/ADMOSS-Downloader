@@ -1,0 +1,59 @@
+name: 🐞 Bug report
+description: Something does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please check the [FAQ](https://github.com/ADMOSSx/ADMOSS-Downloader#-faq) first.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown under the app name at the top of the Download tab.
+      placeholder: "1.5.1"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version
+      placeholder: "Samsung A54, Android 14"
+    validations:
+      required: true
+  - type: dropdown
+    id: site
+    attributes:
+      label: Which site is the link from?
+      options:
+        - YouTube
+        - TikTok
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error text shown in the app
+      description: Copy the message (for example the gray text under "Couldn't load the video info").
+      render: text
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Paste the link ...
+        2. Tap DOWNLOAD ...
+  - type: textarea
+    id: crash
+    attributes:
+      label: Crash report (if the app closed)
+      description: Open the app again, tap Copy on the crash screen and paste it here.
+      render: text
