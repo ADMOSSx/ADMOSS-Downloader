@@ -16,8 +16,8 @@ android {
         applicationId = "com.admoss.downloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 18
-        versionName = "1.14.1"
+        versionCode = 19
+        versionName = "1.15.0"
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
         resourceConfigurations += listOf("en", "ar")
     }

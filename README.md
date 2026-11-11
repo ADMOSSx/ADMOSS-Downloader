@@ -55,7 +55,7 @@
 | 🖼️ | **Cover images** for every download and playlist |
 | 🔔 | **Background downloads** with a notification (progress, cancel) |
 | 🔎 | **Library search** |
-| 📁 | **Folders with seasons** made from videos already on your phone (S1, S2 ...): open or hide each season, add episodes, play in order. Your files are never copied, moved or deleted |
+| 📁 | **Series tab**: folders with seasons made from videos already on your phone (S1, S2 ...): open or hide each season, add episodes, play in order. Your files are never copied, moved or deleted |
 | 🌗 | **Dark and light** themes |
 | 🔄 | **Automatic updates from GitHub**: the app notices a new release, shows the version and release notes, downloads it with progress, checks the file (size, SHA-256, same app, same signing key) and opens Android's own installer. Your downloads and settings are kept |
 | 🛡️ | Automatic **second try** with different network settings when YouTube blocks the first one |

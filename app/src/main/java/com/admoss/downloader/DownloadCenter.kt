@@ -165,8 +165,8 @@ object DownloadCenter {
 
     @Synchronized
     fun removePlaylist(ctx: Context, name: String) {
-        history.filter { it.playlist == name }.forEach { deleteThumb(it) }
-        history = history.filter { it.playlist != name }
+        history.filter { it.playlist == name && !it.external }.forEach { deleteThumb(it) }
+        history = history.filter { !(it.playlist == name && !it.external) }
         saveHistory(ctx)
     }
 
@@ -611,7 +611,7 @@ object DownloadCenter {
     @Synchronized
     private fun addExternalItems(ctx: Context, name: String, items: List<HistoryItem>) {
         if (items.isEmpty()) return
-        var next = (history.filter { it.playlist == name }.maxOfOrNull { it.index } ?: -1) + 1
+        var next = (history.filter { it.playlist == name && it.external }.maxOfOrNull { it.index } ?: -1) + 1
         val placed = items.map {
             val updated = it.copy(index = next)
             next += 1
@@ -653,14 +653,43 @@ object DownloadCenter {
         removeItems(ctx, gone)
     }
 
+    /** Videos the user added from the phone. They live in the Series tab and never in the Library. */
+    val phoneItems: List<HistoryItem>
+        get() = history.filter { it.external }
+
+    /** Everything the app downloaded itself (the Library). */
+    val downloads: List<HistoryItem>
+        get() = history.filter { !it.external }
+
+    /** Keeps the newest 500 downloads. Phone videos are never dropped: "restore" cannot find them again. */
+    private fun trimHistory(list: List<HistoryItem>): List<HistoryItem> {
+        val phone = list.filter { it.external }
+        val own = list.filter { !it.external }.take(500)
+        return phone + own
+    }
+
+    @Synchronized
+    fun renameFolder(ctx: Context, old: String, newName: String) {
+        val n = newName.trim()
+        if (n.isBlank() || n == old) return
+        history = history.map { if (it.external && it.playlist == old) it.copy(playlist = n) else it }
+        saveHistory(ctx)
+    }
+
+    /** Removes a whole series from the app. Only the app's list changes: the files stay on the phone. */
+    @Synchronized
+    fun removeFolder(ctx: Context, name: String) {
+        removeItems(ctx, history.filter { it.external && it.playlist == name })
+    }
+
     // ---- playlist editing ----
 
     @Synchronized
     fun renamePlaylist(ctx: Context, old: String, newName: String) {
         val n = newName.trim()
         if (n.isBlank() || n == old) return
-        val affected = history.filter { it.playlist == old }
-        history = history.map { if (it.playlist == old) it.copy(playlist = n) else it }
+        val affected = history.filter { it.playlist == old && !it.external }
+        history = history.map { if (it.playlist == old && !it.external) it.copy(playlist = n) else it }
         saveHistory(ctx)
         moveInBackground(ctx, affected, n)
     }
@@ -669,7 +698,7 @@ object DownloadCenter {
     fun addToPlaylist(ctx: Context, name: String, uris: List<String>) {
         val n = name.trim()
         if (n.isBlank() || uris.isEmpty()) return
-        var next = (history.filter { it.playlist == n }.maxOfOrNull { it.index } ?: -1) + 1
+        var next = (history.filter { it.playlist == n && !it.external }.maxOfOrNull { it.index } ?: -1) + 1
         val moved = ArrayList<HistoryItem>()
         for (u in uris) {
             history = history.map {
@@ -719,14 +748,14 @@ object DownloadCenter {
 
     @Synchronized
     private fun addHistory(ctx: Context, saved: HistoryItem) {
-        history = (listOf(saved) + history).take(500)
+        history = trimHistory(listOf(saved) + history)
         saveHistory(ctx)
     }
 
     @Synchronized
     private fun mergeHistory(ctx: Context, items: List<HistoryItem>) {
         val known = history.map { it.uri }.toSet()
-        history = (items.filter { it.uri !in known } + history).take(500)
+        history = trimHistory(items.filter { it.uri !in known } + history)
         saveHistory(ctx)
     }
 
