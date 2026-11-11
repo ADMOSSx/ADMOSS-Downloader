@@ -47,7 +47,7 @@
 | 🎚️ | Choose the quality (Best, 1080p, 720p, 480p, 360p) with the size of each option |
 | 🎵 | **MP3 audio** mode |
 | 🖼️ | **TikTok photo posts**: save every photo plus the post's music, then watch them as a slideshow with the music playing |
-| 📚 | **Download queue**: paste many links, they download one after another |
+| 📚 | **Download queue**: paste many links, they download in turn (1 to 3 at the same time, set in Settings) |
 | 📃 | **Playlist support**: load a whole playlist and pick the videos you want |
 | 🗂️ | **Playlists section** in the Library: each playlist is a folder with all its videos in order |
 | ▶️ | **Built-in player** with speed control (0.5x to 2x), double-tap to skip 10 seconds, a seek bar and a **playlist menu** to jump to any video |
@@ -55,6 +55,7 @@
 | 🖼️ | **Cover images** for every download and playlist |
 | 🔔 | **Background downloads** with a notification (progress, cancel) |
 | 🔎 | **Library search** |
+| 📁 | **Folders with seasons** made from videos already on your phone (S1, S2 ...): open or hide each season, add episodes, play in order. Your files are never copied, moved or deleted |
 | 🌗 | **Dark and light** themes |
 | 🔄 | **Automatic updates from GitHub**: the app notices a new release, shows the version and release notes, downloads it with progress, checks the file (size, SHA-256, same app, same signing key) and opens Android's own installer. Your downloads and settings are kept |
 | 🛡️ | Automatic **second try** with different network settings when YouTube blocks the first one |
@@ -193,6 +194,10 @@ ADMOSS-Downloader/
     │   ├── DownloadCenter.kt      # download logic and history
     │   ├── Updater.kt             # in-app updates
     │   ├── Engine.kt              # yt-dlp + ffmpeg startup
+    │   ├── TikTokPhotos.kt        # TikTok photo posts
+    │   ├── PhotoViewerActivity.kt # photo slideshow with music
+    │   ├── FileDeleter.kt         # deleting files from the phone
+    │   ├── AppSettings.kt         # the few settings
     │   ├── VideoInfo.kt           # video and playlist info
     │   ├── Thumb.kt               # cover images
     │   └── YtOptions.kt           # retry settings
@@ -209,8 +214,10 @@ ADMOSS-Downloader/
 - [x] Library search
 - [x] Built-in player with speed control
 - [x] In-app updates
-- [ ] Settings screen (default quality, Wi-Fi only, custom folder)
-- [ ] Parallel downloads
+- [x] Settings screen (updates, downloads at the same time)
+- [ ] More settings (default quality, Wi-Fi only, custom folder)
+- [x] Parallel downloads
+- [x] Folders with seasons for phone videos
 - [ ] Subtitles
 - [ ] Arabic interface (right-to-left)
 

@@ -48,8 +48,14 @@ class AdmossApp : Application() {
             }
         }
 
+        initialize("Cache cleanup") {
+            // Leftovers of cancelled or interrupted downloads. A new process has nothing running yet.
+            File(cacheDir, "info").deleteRecursively()
+            File(cacheDir, "dl").deleteRecursively()
+        }
         initialize("DownloadCenter.init") { DownloadCenter.init(this) }
-        initialize("Engine.start") { Engine.start(this) }
+        // The engine starts when the app is opened (DownloadViewModel) or a download starts (DownloadService),
+        // not for the background update check.
         initialize("Updater.init") { Updater.init() }
         initialize("AppSettings.init") { AppSettings.init(this) }
         initialize("UpdateScheduler.apply") { UpdateScheduler.apply(this) }

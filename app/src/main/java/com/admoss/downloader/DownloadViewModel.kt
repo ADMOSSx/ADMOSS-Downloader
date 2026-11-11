@@ -70,9 +70,15 @@ class DownloadViewModel(app: Application) : AndroidViewModel(app) {
     private val rawTime = ConcurrentHashMap<String, Long>()
 
     private fun rememberRaw(url: String, raw: String) {
-        if (rawCache.size > 40) {
-            rawCache.clear()
-            rawTime.clear()
+        if (rawCache.size >= 15) {
+            // Drop only the oldest one, so a playlist size check does not lose everything it just read
+            val oldest = rawTime.entries.minByOrNull { it.value }?.key
+            if (oldest != null) {
+                rawCache.remove(oldest)
+                rawTime.remove(oldest)
+            } else {
+                rawCache.clear()
+            }
         }
         rawCache[url] = raw
         rawTime[url] = System.currentTimeMillis()

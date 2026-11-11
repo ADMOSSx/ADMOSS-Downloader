@@ -749,7 +749,7 @@ private fun SettingsTab() {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Deleting a download in the Library also deletes the file from your phone, after you confirm.",
+                    "Deleting a download in the Library also deletes the file from your phone, after you confirm. Videos you added from your phone are only removed from the app.",
                     color = p.sub,
                     fontSize = 12.sp
                 )

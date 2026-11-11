@@ -66,8 +66,16 @@ object Engine {
                 val last = prefs.getLong("engine_update_at", 0L)
                 if (System.currentTimeMillis() - last > 12L * 60L * 60L * 1000L) {
                     Thread.sleep(25000) // let the first video lookups finish first
-                    YoutubeDL.getInstance().updateYoutubeDL(app)
-                    prefs.edit().putLong("engine_update_at", System.currentTimeMillis()).apply()
+                    // Never swap the engine files while a download is running: wait for it (up to 10 minutes)
+                    var waited = 0
+                    while (DownloadCenter.activeCount > 0 && waited < 120) {
+                        Thread.sleep(5000)
+                        waited++
+                    }
+                    if (DownloadCenter.activeCount == 0) {
+                        YoutubeDL.getInstance().updateYoutubeDL(app)
+                        prefs.edit().putLong("engine_update_at", System.currentTimeMillis()).apply()
+                    }
                 }
             } catch (e: Throwable) {
                 // ignore
@@ -89,6 +97,10 @@ object Engine {
     /** Downloads the newest yt-dlp. Fixes most "couldn't load video info" problems. */
     fun updateNow(context: Context) {
         if (updating || !upFlag) return
+        if (DownloadCenter.activeCount > 0) {
+            main.post { updateMessage = "Wait for the running downloads to finish, then tap Update engine again." }
+            return
+        }
         val app = context.applicationContext
         main.post {
             updating = true

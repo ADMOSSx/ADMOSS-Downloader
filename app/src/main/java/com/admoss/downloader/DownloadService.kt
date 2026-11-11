@@ -80,6 +80,7 @@ class DownloadService : Service() {
             buildProgress(first?.title ?: "ADMOSS Downloader", "", 0, "Starting…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         )
+        Engine.start(applicationContext)
         acquireWakeLock()
         spawnWorkers()
         // Nothing was waiting (for example it was cancelled already): don't stay in the foreground

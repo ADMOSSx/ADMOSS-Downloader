@@ -129,6 +129,14 @@ object DownloadCenter {
                 item.cancelled = true
                 item.status = Status.CANCELLED
                 item.stage = "Cancelled"
+                // the saved video info is not needed any more
+                item.infoJsonPath?.let {
+                    try {
+                        File(it).delete()
+                    } catch (e: Throwable) {
+                        // ignore
+                    }
+                }
             }
             Status.DOWNLOADING -> {
                 item.cancelled = true
@@ -927,7 +935,7 @@ object DownloadCenter {
             msg.contains("Unable to resolve host", true) || msg.contains("Network", true) ->
                 "No internet connection."
             msg.contains("Private video", true) -> "This video is private."
-            msg.contains("429") || msg.contains("Too Many Requests", true) ->
+            msg.contains("HTTP Error 429", true) || msg.contains("Too Many Requests", true) ->
                 "Too many requests (HTTP 429). Wait a few minutes and try again."
             msg.contains("Unable to extract", true) || msg.contains("nsig", true) ->
                 "The site changed something. Tap Update engine, then try again."
