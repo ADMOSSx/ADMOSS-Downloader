@@ -38,7 +38,9 @@ data class HistoryItem(
     val photoUris: List<String> = emptyList(),
     val musicUri: String? = null,
     /** Added from the phone by the user: the file is not ours, so it is never deleted or moved. */
-    val external: Boolean = false
+    val external: Boolean = false,
+    /** Season inside a folder (only for phone videos), for example "S1". */
+    val season: String? = null
 )
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
@@ -557,13 +559,14 @@ object DownloadCenter {
      * Adds videos or songs that are already on the phone to a playlist. Nothing is copied or moved:
      * the app only remembers where each file is. [onDone] gets the number of items really added.
      */
-    fun addFromPhoneAsync(ctx: Context, playlist: String, uris: List<Uri>, onDone: (Int) -> Unit) {
+    fun addFromPhoneAsync(ctx: Context, playlist: String, uris: List<Uri>, season: String?, onDone: (Int) -> Unit) {
         val n = playlist.trim()
         if (n.isBlank() || uris.isEmpty()) {
             onDone(0)
             return
         }
         val app = ctx.applicationContext
+        val seasonName = season?.trim()?.ifBlank { null }
         thread(name = "admoss-add-phone") {
             val made = ArrayList<HistoryItem>()
             try {
@@ -582,7 +585,8 @@ object DownloadCenter {
                             index = 0,
                             thumb = makeExternalThumb(app, p.uri),
                             size = p.size,
-                            external = true
+                            external = true,
+                            season = seasonName
                         )
                     )
                 }
@@ -609,6 +613,38 @@ object DownloadCenter {
         saveHistory(ctx)
     }
 
+    /** Suggests "S1" for a new folder and "S2", "S3" ... for the next seasons of an existing one. */
+    fun nextSeasonName(folder: String): String =
+        "S" + (history.filter { it.playlist == folder }.mapNotNull { it.season }.distinct().size + 1)
+
+    /** Episodes without a season first, then the seasons in natural order (S2 before S10), episodes in order. */
+    fun playOrder(list: List<HistoryItem>): List<HistoryItem> =
+        list.sortedWith { a, b ->
+            val sa = a.season
+            val sb = b.season
+            when {
+                sa == null && sb != null -> -1
+                sa != null && sb == null -> 1
+                sa != null && sb != null && sa != sb -> naturalCompare(sa, sb)
+                else -> a.index - b.index
+            }
+        }
+
+    @Synchronized
+    fun renameSeason(ctx: Context, folder: String, old: String, newName: String) {
+        val n = newName.trim()
+        if (n.isBlank() || n == old) return
+        history = history.map { if (it.playlist == folder && it.season == old) it.copy(season = n) else it }
+        saveHistory(ctx)
+    }
+
+    /** Only phone videos have seasons, so this only removes them from the app. No file is touched. */
+    @Synchronized
+    fun removeSeason(ctx: Context, folder: String, season: String) {
+        val gone = history.filter { it.playlist == folder && it.season == season && it.external }
+        removeItems(ctx, gone)
+    }
+
     // ---- playlist editing ----
 
     @Synchronized
@@ -630,7 +666,7 @@ object DownloadCenter {
         for (u in uris) {
             history = history.map {
                 if (it.uri == u && it.photoUris.isEmpty()) {
-                    val updated = it.copy(playlist = n, index = next)
+                    val updated = it.copy(playlist = n, index = next, season = null)
                     next += 1
                     moved.add(updated)
                     updated
@@ -949,7 +985,8 @@ object DownloadCenter {
                 o.optLong("sz", 0L),
                 (o.optJSONArray("pu")?.let { a -> (0 until a.length()).map { i -> a.getString(i) } } ?: emptyList()),
                 o.optString("mu", "").ifBlank { null },
-                o.optBoolean("ex", false)
+                o.optBoolean("ex", false),
+                o.optString("se", "").ifBlank { null }
             )
         }
     } catch (e: Throwable) {
@@ -963,7 +1000,7 @@ object DownloadCenter {
             arr.put(
                 JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
                     .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "").put("sz", it.size)
-                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "").put("ex", it.external)
+                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "").put("ex", it.external).put("se", it.season ?: "")
             )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)

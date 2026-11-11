@@ -1794,6 +1794,8 @@ private fun LibraryTab() {
 
     // Videos that are already on the phone: picked with Android's file picker, never copied or moved
     var phoneTarget by remember { mutableStateOf<String?>(null) }
+    var phoneSeason by remember { mutableStateOf<String?>(null) }
+    var addPhoneFolder by remember { mutableStateOf<String?>(null) }
     var showNewFromPhone by remember { mutableStateOf(false) }
     val phoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { picked ->
         val target = phoneTarget
@@ -1806,7 +1808,7 @@ private fun LibraryTab() {
                     // some pickers only give a temporary permission
                 }
             }
-            DownloadCenter.addFromPhoneAsync(context, target, picked) { n ->
+            DownloadCenter.addFromPhoneAsync(context, target, picked, phoneSeason) { n ->
                 Toast.makeText(
                     context,
                     if (n == 0) "These are already in your library." else "Added $n to \"$target\".",
@@ -1834,11 +1836,22 @@ private fun LibraryTab() {
             name,
             onBack = { openName = null },
             onRenamed = { openName = it },
-            onAddFromPhone = { n ->
-                phoneTarget = n
-                phoneLauncher.launch(arrayOf("video/*", "audio/*"))
-            }
+            onAddFromPhone = { n -> addPhoneFolder = n }
         )
+        addPhoneFolder?.let { f ->
+            PhoneAddDialog(
+                askFolder = false,
+                folder = f,
+                season = DownloadCenter.nextSeasonName(f),
+                onDone = { _, s ->
+                    addPhoneFolder = null
+                    phoneTarget = f
+                    phoneSeason = s
+                    phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+                },
+                onDismiss = { addPhoneFolder = null }
+            )
+        }
     } else {
         val all = DownloadCenter.history
         val videos = all.filter { !it.audio && it.photoUris.isEmpty() }
@@ -1863,12 +1876,14 @@ private fun LibraryTab() {
         }
 
         if (showNewFromPhone) {
-            RenameDialog(
-                current = "",
-                title = "New playlist from phone files",
-                onDone = { n ->
+            PhoneAddDialog(
+                askFolder = true,
+                folder = "",
+                season = "S1",
+                onDone = { f, s ->
                     showNewFromPhone = false
-                    phoneTarget = n.trim()
+                    phoneTarget = f
+                    phoneSeason = s
                     phoneLauncher.launch(arrayOf("video/*", "audio/*"))
                 },
                 onDismiss = { showNewFromPhone = false }
@@ -2113,7 +2128,7 @@ private fun LibraryPage(
                 }
             }
             items(groupNames, key = { it }) { groupName ->
-                val list = (groups[groupName] ?: emptyList()).sortedBy { it.index }
+                val list = DownloadCenter.playOrder(groups[groupName] ?: emptyList())
                 if (gridView) {
                     PlaylistGridCard(
                         name = groupName,
@@ -2400,10 +2415,43 @@ private fun PlaylistDetail(
     val p = LocalPalette.current
     val context = LocalContext.current
     val all = DownloadCenter.history
-    val videos = all.filter { it.playlist == name }.sortedBy { it.index }
+    val videos = DownloadCenter.playOrder(all.filter { it.playlist == name })
     var showRename by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
+    var seasonToRename by remember { mutableStateOf<String?>(null) }
+    var seasonToRemove by remember { mutableStateOf<String?>(null) }
+
+    seasonToRename?.let { old ->
+        RenameDialog(
+            current = old,
+            title = "Rename season",
+            onDone = { n ->
+                DownloadCenter.renameSeason(context, name, old, n)
+                seasonToRename = null
+            },
+            onDismiss = { seasonToRename = null }
+        )
+    }
+    seasonToRemove?.let { s ->
+        AlertDialog(
+            onDismissRequest = { seasonToRemove = null },
+            title = { Text("Remove \"$s\"?") },
+            text = {
+                Text(
+                    "The episodes are removed from the app only. Their files stay on your phone.",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    DownloadCenter.removeSeason(context, name, s)
+                    seasonToRemove = null
+                }) { Text("Remove", color = Pink, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = { TextButton(onClick = { seasonToRemove = null }) { Text("Cancel") } }
+        )
+    }
 
     if (showRename) {
         RenameDialog(
@@ -2563,13 +2611,35 @@ private fun PlaylistDetail(
             SmallAction("Add from phone", R.drawable.ic_add, Modifier.fillMaxWidth()) { onAddFromPhone(name) }
         }
 
-        itemsIndexed(videos, key = { _, v -> v.uri }) { i, v ->
+        // Episodes without a season first, then one section for each season
+        val plain = videos.filter { it.season == null }
+        itemsIndexed(plain, key = { _, v -> v.uri }) { i, v ->
             PlaylistVideoRow(
                 number = i + 1,
                 item = v,
-                onPlay = { playItems(context, videos, i, name) },
+                onPlay = { playItems(context, videos, videos.indexOf(v), name) },
                 onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
             )
+        }
+        videos.mapNotNull { it.season }.distinct().forEach { s ->
+            val eps = videos.filter { it.season == s }
+            item(key = "season-$s") {
+                SeasonHeader(
+                    name = s,
+                    count = eps.size,
+                    onPlay = { playItems(context, eps, 0, name + " • " + s) },
+                    onRename = { seasonToRename = s },
+                    onRemove = { seasonToRemove = s }
+                )
+            }
+            itemsIndexed(eps, key = { _, v -> v.uri }) { i, v ->
+                PlaylistVideoRow(
+                    number = i + 1,
+                    item = v,
+                    onPlay = { playItems(context, videos, videos.indexOf(v), name) },
+                    onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
+                )
+            }
         }
 
         item {
@@ -2585,6 +2655,101 @@ private fun PlaylistDetail(
                         Text("Delete all files in this playlist", color = Pink)
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Asks for the folder name (when it is new) and the season, then the file picker opens. */
+@Composable
+private fun PhoneAddDialog(
+    askFolder: Boolean,
+    folder: String,
+    season: String,
+    onDone: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var f by remember { mutableStateOf(folder) }
+    var s by remember { mutableStateOf(season) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (askFolder) "New folder from phone" else "Add from phone") },
+        text = {
+            Column {
+                if (askFolder) {
+                    OutlinedTextField(
+                        value = f,
+                        onValueChange = { f = it },
+                        singleLine = true,
+                        label = { Text("Folder name (for example Wednesday)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+                OutlinedTextField(
+                    value = s,
+                    onValueChange = { s = it },
+                    singleLine = true,
+                    label = { Text("Season (optional, for example S1)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onDone(f.trim(), s.trim()) }, enabled = f.isNotBlank()) {
+                Text("Choose videos")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/** The title of one season inside a folder, with play and a small menu. */
+@Composable
+private fun SeasonHeader(
+    name: String,
+    count: Int,
+    onPlay: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val p = LocalPalette.current
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                color = p.text,
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(if (count == 1) "1 episode" else "$count episodes", color = p.sub, fontSize = 12.sp)
+        }
+        IconButton(onClick = onPlay) { Ico(R.drawable.ic_play, p.accent, 26.dp, "Play this season") }
+        Box {
+            IconButton(onClick = { menu = true }) { Ico(R.drawable.ic_edit, p.sub, 20.dp, "Season options") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename season") },
+                    onClick = {
+                        menu = false
+                        onRename()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Remove season from the app", color = Pink) },
+                    onClick = {
+                        menu = false
+                        onRemove()
+                    }
+                )
             }
         }
     }
