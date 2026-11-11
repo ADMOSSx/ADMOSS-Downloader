@@ -49,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -1836,7 +1837,12 @@ private fun LibraryTab() {
             name,
             onBack = { openName = null },
             onRenamed = { openName = it },
-            onAddFromPhone = { n -> addPhoneFolder = n }
+            onAddFromPhone = { n -> addPhoneFolder = n },
+            onAddToSeason = { f, s ->
+                phoneTarget = f
+                phoneSeason = s
+                phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+            }
         )
         addPhoneFolder?.let { f ->
             PhoneAddDialog(
@@ -2410,7 +2416,8 @@ private fun PlaylistDetail(
     name: String,
     onBack: () -> Unit,
     onRenamed: (String) -> Unit,
-    onAddFromPhone: (String) -> Unit
+    onAddFromPhone: (String) -> Unit,
+    onAddToSeason: (String, String) -> Unit
 ) {
     val p = LocalPalette.current
     val context = LocalContext.current
@@ -2421,6 +2428,7 @@ private fun PlaylistDetail(
     var showDelete by remember { mutableStateOf(false) }
     var seasonToRename by remember { mutableStateOf<String?>(null) }
     var seasonToRemove by remember { mutableStateOf<String?>(null) }
+    var collapsed by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     seasonToRename?.let { old ->
         RenameDialog(
@@ -2545,7 +2553,12 @@ private fun PlaylistDetail(
                     Modifier.weight(1f)
                 )
                 StatCard(totalSizeText(videos), "Total size", Modifier.weight(1f))
-                StatCard("${videos.count { it.audio }}", "Audio files", Modifier.weight(1f))
+                val seasonCount = videos.mapNotNull { it.season }.distinct().size
+                if (seasonCount > 0) {
+                    StatCard("$seasonCount", if (seasonCount == 1) "Season" else "Seasons", Modifier.weight(1f))
+                } else {
+                    StatCard("${videos.count { it.audio }}", "Audio files", Modifier.weight(1f))
+                }
             }
         }
 
@@ -2621,24 +2634,46 @@ private fun PlaylistDetail(
                 onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
             )
         }
-        videos.mapNotNull { it.season }.distinct().forEach { s ->
-            val eps = videos.filter { it.season == s }
-            item(key = "season-$s") {
-                SeasonHeader(
-                    name = s,
-                    count = eps.size,
-                    onPlay = { playItems(context, eps, 0, name + " • " + s) },
-                    onRename = { seasonToRename = s },
-                    onRemove = { seasonToRemove = s }
-                )
+        val seasonList = videos.mapNotNull { it.season }.distinct()
+        if (seasonList.size > 1) {
+            item(key = "season-toggle-all") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { collapsed = emptySet() }) { Text("Show all", color = p.accent) }
+                    TextButton(onClick = { collapsed = seasonList.toSet() }) { Text("Hide all", color = p.sub) }
+                }
             }
-            itemsIndexed(eps, key = { _, v -> v.uri }) { i, v ->
-                PlaylistVideoRow(
-                    number = i + 1,
-                    item = v,
-                    onPlay = { playItems(context, videos, videos.indexOf(v), name) },
-                    onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
-                )
+        }
+        seasonList.forEach { s ->
+            val eps = videos.filter { it.season == s }
+            val isOpen = s !in collapsed
+            val sizeText = totalSizeText(eps)
+            val subtitle = (if (eps.size == 1) "1 episode" else "${eps.size} episodes") +
+                (if (sizeText == "-") "" else "  •  $sizeText")
+            item(key = "season-$s") {
+                Box(Modifier.animateItemPlacement()) {
+                    SeasonCard(
+                        name = s,
+                        subtitle = subtitle,
+                        open = isOpen,
+                        onToggle = { collapsed = if (isOpen) collapsed + s else collapsed - s },
+                        onPlay = { playItems(context, eps, 0, name + " • " + s) },
+                        onAdd = { onAddToSeason(name, s) },
+                        onRename = { seasonToRename = s },
+                        onRemove = { seasonToRemove = s }
+                    )
+                }
+            }
+            if (isOpen) {
+                itemsIndexed(eps, key = { _, v -> v.uri }) { i, v ->
+                    Box(Modifier.animateItemPlacement().padding(start = 14.dp)) {
+                        PlaylistVideoRow(
+                            number = i + 1,
+                            item = v,
+                            onPlay = { playItems(context, videos, videos.indexOf(v), name) },
+                            onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
+                        )
+                    }
+                }
             }
         }
 
@@ -2655,6 +2690,92 @@ private fun PlaylistDetail(
                         Text("Delete all files in this playlist", color = Pink)
                     }
                 }
+            }
+        }
+    }
+}
+
+/** One season of a folder: tap to show or hide its episodes. "+" adds videos, the big button plays it. */
+@Composable
+private fun SeasonCard(
+    name: String,
+    subtitle: String,
+    open: Boolean,
+    onToggle: () -> Unit,
+    onPlay: () -> Unit,
+    onAdd: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val p = LocalPalette.current
+    val angle by animateFloatAsState(if (open) 0f else -90f, tween(200), label = "season-arrow")
+    var menu by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (open) p.accent.copy(alpha = 0.10f) else p.card)
+            .border(1.dp, if (open) p.accent.copy(alpha = 0.45f) else p.border, shape)
+            .clickable { onToggle() }
+            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_expand),
+            contentDescription = if (open) "Hide episodes" else "Show episodes",
+            tint = if (open) p.accent else p.sub,
+            modifier = Modifier
+                .size(26.dp)
+                .rotate(angle)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                color = p.text,
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(subtitle, color = p.sub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = onAdd) { Ico(R.drawable.ic_add, p.accent, 24.dp, "Add videos to this season") }
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(p.accent)
+                .clickable { onPlay() },
+            contentAlignment = Alignment.Center
+        ) {
+            Ico(R.drawable.ic_play, p.onAccent, 22.dp, "Play this season")
+        }
+        Box {
+            IconButton(onClick = { menu = true }) { Ico(R.drawable.ic_more, p.sub, 22.dp, "Season options") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Add videos") },
+                    onClick = {
+                        menu = false
+                        onAdd()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Rename season") },
+                    onClick = {
+                        menu = false
+                        onRename()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Remove season from the app", color = Pink) },
+                    onClick = {
+                        menu = false
+                        onRemove()
+                    }
+                )
             }
         }
     }
