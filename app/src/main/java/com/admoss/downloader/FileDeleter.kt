@@ -34,8 +34,16 @@ object DeleteController {
         if (item.photoUris.isNotEmpty()) item.photoUris + listOfNotNull(item.musicUri) else listOf(item.uri)
 
     /** Call from the main thread. */
-    fun delete(ctx: Context, items: List<HistoryItem>) {
-        if (items.isEmpty() || busy) return
+    fun delete(ctx: Context, all: List<HistoryItem>) {
+        if (all.isEmpty() || busy) return
+        // Videos the user added from the phone are only taken off the list: their files are never deleted
+        val external = all.filter { it.external }
+        if (external.isNotEmpty()) DownloadCenter.removeItems(ctx, external)
+        val items = all.filter { !it.external }
+        if (items.isEmpty()) {
+            message = "Removed from the list. The files stay on your phone."
+            return
+        }
         busy = true
         message = null
         deletedItems = 0

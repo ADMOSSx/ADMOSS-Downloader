@@ -66,7 +66,9 @@ import androidx.core.content.ContextCompat
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ---------- colors & theme ----------
 
@@ -1582,6 +1584,13 @@ private fun hasMediaPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
 
+/** True when the file can still be opened (a phone video may have been deleted or moved). */
+private fun uriReadable(context: Context, uriText: String): Boolean = try {
+    context.contentResolver.openAssetFileDescriptor(Uri.parse(uriText), "r")?.use { true } ?: false
+} catch (e: Throwable) {
+    false
+}
+
 private fun itemMeta(item: HistoryItem): String {
     val kind = when {
         item.photoUris.isNotEmpty() -> {
@@ -1646,7 +1655,12 @@ private fun SmallAction(label: String, @DrawableRes icon: Int, modifier: Modifie
 }
 
 @Composable
-private fun RenameDialog(current: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+private fun RenameDialog(
+    current: String,
+    onDone: (String) -> Unit,
+    onDismiss: () -> Unit,
+    title: String = "Rename playlist"
+) {
     var text by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1778,6 +1792,32 @@ private fun LibraryTab() {
         }
     }
 
+    // Videos that are already on the phone: picked with Android's file picker, never copied or moved
+    var phoneTarget by remember { mutableStateOf<String?>(null) }
+    var showNewFromPhone by remember { mutableStateOf(false) }
+    val phoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { picked ->
+        val target = phoneTarget
+        phoneTarget = null
+        if (target != null && picked.isNotEmpty()) {
+            picked.forEach {
+                try {
+                    context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Throwable) {
+                    // some pickers only give a temporary permission
+                }
+            }
+            DownloadCenter.addFromPhoneAsync(context, target, picked) { n ->
+                Toast.makeText(
+                    context,
+                    if (n == 0) "These are already in your library." else "Added $n to \"$target\".",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            openName = target
+            scope.launch { pagerState.scrollToPage(4) }
+        }
+    }
+
     // After a reinstall the list is empty: bring the files back by themselves if access was already given
     LaunchedEffect(Unit) {
         if (DownloadCenter.history.isEmpty() && hasMediaPermission(context)) {
@@ -1790,7 +1830,15 @@ private fun LibraryTab() {
 
     val name = openName
     if (name != null) {
-        PlaylistDetail(name, onBack = { openName = null }, onRenamed = { openName = it })
+        PlaylistDetail(
+            name,
+            onBack = { openName = null },
+            onRenamed = { openName = it },
+            onAddFromPhone = { n ->
+                phoneTarget = n
+                phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+            }
+        )
     } else {
         val all = DownloadCenter.history
         val videos = all.filter { !it.audio && it.photoUris.isEmpty() }
@@ -1811,6 +1859,19 @@ private fun LibraryTab() {
                     scope.launch { pagerState.scrollToPage(4) }
                 },
                 onDismiss = { showNew = false }
+            )
+        }
+
+        if (showNewFromPhone) {
+            RenameDialog(
+                current = "",
+                title = "New playlist from phone files",
+                onDone = { n ->
+                    showNewFromPhone = false
+                    phoneTarget = n.trim()
+                    phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+                },
+                onDismiss = { showNewFromPhone = false }
             )
         }
 
@@ -1977,6 +2038,7 @@ private fun LibraryTab() {
                     query = query,
                     onOpenPlaylist = { openName = it },
                     onNewPlaylist = { showNew = true },
+                    onNewFromPhone = { showNewFromPhone = true },
                     selected = selected,
                     onToggle = { uri -> selected = if (uri in selected) selected - uri else selected + uri },
                     onLongPress = { uri -> selected = selected + uri },
@@ -1994,6 +2056,7 @@ private fun LibraryPage(
     query: String,
     onOpenPlaylist: (String) -> Unit,
     onNewPlaylist: () -> Unit,
+    onNewFromPhone: () -> Unit,
     selected: Set<String>,
     onToggle: (String) -> Unit,
     onLongPress: (String) -> Unit,
@@ -2030,7 +2093,10 @@ private fun LibraryPage(
     ) {
         if (category == 4) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                SmallAction("New playlist", R.drawable.ic_add, Modifier.fillMaxWidth()) { onNewPlaylist() }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SmallAction("New playlist", R.drawable.ic_add, Modifier.weight(1f)) { onNewPlaylist() }
+                    SmallAction("New from phone", R.drawable.ic_add, Modifier.weight(1f)) { onNewFromPhone() }
+                }
             }
             if (groups.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
@@ -2325,7 +2391,12 @@ private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> 
 }
 
 @Composable
-private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String) -> Unit) {
+private fun PlaylistDetail(
+    name: String,
+    onBack: () -> Unit,
+    onRenamed: (String) -> Unit,
+    onAddFromPhone: (String) -> Unit
+) {
     val p = LocalPalette.current
     val context = LocalContext.current
     val all = DownloadCenter.history
@@ -2488,6 +2559,10 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
             }
         }
 
+        item {
+            SmallAction("Add from phone", R.drawable.ic_add, Modifier.fillMaxWidth()) { onAddFromPhone(name) }
+        }
+
         itemsIndexed(videos, key = { _, v -> v.uri }) { i, v ->
             PlaylistVideoRow(
                 number = i + 1,
@@ -2562,12 +2637,20 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+            val rowContext = LocalContext.current
+            val missing by produceState(initialValue = false, item.uri) {
+                value = item.external && withContext(Dispatchers.IO) { !uriReadable(rowContext, item.uri) }
+            }
             val kind = if (item.audio) "Audio" else "Video"
-            Text(
-                if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
-                color = p.sub,
-                fontSize = 11.sp
-            )
+            if (missing) {
+                Text("File not found on the phone", color = Red, fontSize = 11.sp)
+            } else {
+                Text(
+                    if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
+                    color = p.sub,
+                    fontSize = 11.sp
+                )
+            }
         }
         IconButton(onClick = onRemove) {
             Ico(R.drawable.ic_close, p.sub, 20.dp, "Remove from this playlist")
@@ -2660,6 +2743,14 @@ private fun DeleteDialog(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text("You can't undo this.", color = p.sub, fontSize = 13.sp)
+                if (items.any { it.external }) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Videos added from your phone are only removed from the app. Their files stay on your phone.",
+                        color = p.sub,
+                        fontSize = 13.sp
+                    )
+                }
                 Spacer(Modifier.height(6.dp))
                 TextButton(onClick = onRemoveFromList) {
                     Text("Only remove from the list", color = p.accent)

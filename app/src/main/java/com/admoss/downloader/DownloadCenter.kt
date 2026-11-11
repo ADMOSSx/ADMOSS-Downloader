@@ -15,6 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import android.content.ContentUris
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.os.Handler
 import android.os.Looper
 import android.util.Size
@@ -35,7 +36,9 @@ data class HistoryItem(
     val size: Long = 0L,
     /** Saved pictures of a TikTok photo post (empty for videos). */
     val photoUris: List<String> = emptyList(),
-    val musicUri: String? = null
+    val musicUri: String? = null,
+    /** Added from the phone by the user: the file is not ours, so it is never deleted or moved. */
+    val external: Boolean = false
 )
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
@@ -474,6 +477,138 @@ object DownloadCenter {
         return items.size
     }
 
+    // ---- videos and songs that are already on the phone ----
+
+    private class Picked(val uri: Uri, val name: String, val size: Long)
+
+    private fun describe(ctx: Context, uri: Uri): Picked {
+        var name = ""
+        var size = 0L
+        try {
+            ctx.contentResolver.query(
+                uri,
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    name = c.getString(0) ?: ""
+                    size = if (c.isNull(1)) 0L else c.getLong(1)
+                }
+            }
+        } catch (e: Throwable) {
+            // keep the defaults
+        }
+        if (name.isBlank()) name = uri.lastPathSegment ?: "Video"
+        return Picked(uri, name, size)
+    }
+
+    /** "Episode 2" comes before "Episode 10". */
+    private fun naturalCompare(a: String, b: String): Int {
+        val ra = Regex("\\d+|\\D+").findAll(a.lowercase()).map { it.value }.toList()
+        val rb = Regex("\\d+|\\D+").findAll(b.lowercase()).map { it.value }.toList()
+        var i = 0
+        while (i < ra.size && i < rb.size) {
+            val x = ra[i]
+            val y = rb[i]
+            val c = if (x[0].isDigit() && y[0].isDigit()) {
+                x.toBigInteger().compareTo(y.toBigInteger())
+            } else {
+                x.compareTo(y)
+            }
+            if (c != 0) return c
+            i++
+        }
+        return ra.size - rb.size
+    }
+
+    /** A small cover for a file we did not create. Best effort. */
+    private fun makeExternalThumb(ctx: Context, uri: Uri): String? {
+        val bmp: Bitmap? = try {
+            ctx.contentResolver.loadThumbnail(uri, Size(480, 270), null)
+        } catch (e: Throwable) {
+            try {
+                val r = MediaMetadataRetriever()
+                try {
+                    r.setDataSource(ctx, uri)
+                    val frame = r.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        ?: r.getFrameAtTime(0L)
+                    frame?.let { f ->
+                        Bitmap.createScaledBitmap(f, 480, (480f * f.height / f.width).toInt().coerceAtLeast(1), true)
+                    }
+                } finally {
+                    r.release()
+                }
+            } catch (e2: Throwable) {
+                null
+            }
+        }
+        if (bmp == null) return null
+        return try {
+            val dir = File(ctx.filesDir, "thumbs").apply { mkdirs() }
+            val file = File(dir, "e${System.nanoTime()}.img")
+            file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            file.absolutePath
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Adds videos or songs that are already on the phone to a playlist. Nothing is copied or moved:
+     * the app only remembers where each file is. [onDone] gets the number of items really added.
+     */
+    fun addFromPhoneAsync(ctx: Context, playlist: String, uris: List<Uri>, onDone: (Int) -> Unit) {
+        val n = playlist.trim()
+        if (n.isBlank() || uris.isEmpty()) {
+            onDone(0)
+            return
+        }
+        val app = ctx.applicationContext
+        thread(name = "admoss-add-phone") {
+            val made = ArrayList<HistoryItem>()
+            try {
+                val known = history.map { it.uri }.toSet()
+                val picked = uris.filter { it.toString() !in known }
+                    .map { describe(app, it) }
+                    .sortedWith { a, b -> naturalCompare(a.name, b.name) }
+                for (p in picked) {
+                    val type = app.contentResolver.getType(p.uri) ?: ""
+                    made.add(
+                        HistoryItem(
+                            title = cutText(p.name.substringBeforeLast('.').ifBlank { p.name }, 90),
+                            uri = p.uri.toString(),
+                            audio = type.startsWith("audio"),
+                            playlist = n,
+                            index = 0,
+                            thumb = makeExternalThumb(app, p.uri),
+                            size = p.size,
+                            external = true
+                        )
+                    )
+                }
+            } catch (e: Throwable) {
+                // add what was read so far
+            }
+            mainHandler.post {
+                addExternalItems(app, n, made)
+                onDone(made.size)
+            }
+        }
+    }
+
+    @Synchronized
+    private fun addExternalItems(ctx: Context, name: String, items: List<HistoryItem>) {
+        if (items.isEmpty()) return
+        var next = (history.filter { it.playlist == name }.maxOfOrNull { it.index } ?: -1) + 1
+        val placed = items.map {
+            val updated = it.copy(index = next)
+            next += 1
+            updated
+        }
+        history = placed + history
+        saveHistory(ctx)
+    }
+
     // ---- playlist editing ----
 
     @Synchronized
@@ -510,6 +645,10 @@ object DownloadCenter {
 
     @Synchronized
     fun removeFromPlaylist(ctx: Context, item: HistoryItem) {
+        if (item.external) {
+            removeItems(ctx, listOf(item))
+            return
+        }
         history = history.map { if (it.uri == item.uri) it.copy(playlist = null, index = 0) else it }
         saveHistory(ctx)
         moveInBackground(ctx, listOf(item), "")
@@ -520,7 +659,7 @@ object DownloadCenter {
         val app = ctx.applicationContext
         thread(name = "admoss-move") {
             for (item in items) {
-                if (item.photoUris.isNotEmpty()) continue
+                if (item.photoUris.isNotEmpty() || item.external) continue
                 try {
                     val root = if (item.audio) "Music/ADMOSS" else "Movies/ADMOSS"
                     val sub = safeName(playlist, 60)
@@ -809,7 +948,8 @@ object DownloadCenter {
                 o.optString("th", "").ifBlank { null },
                 o.optLong("sz", 0L),
                 (o.optJSONArray("pu")?.let { a -> (0 until a.length()).map { i -> a.getString(i) } } ?: emptyList()),
-                o.optString("mu", "").ifBlank { null }
+                o.optString("mu", "").ifBlank { null },
+                o.optBoolean("ex", false)
             )
         }
     } catch (e: Throwable) {
@@ -823,7 +963,7 @@ object DownloadCenter {
             arr.put(
                 JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
                     .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "").put("sz", it.size)
-                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "")
+                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "").put("ex", it.external)
             )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)
