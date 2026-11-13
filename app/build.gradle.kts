@@ -16,8 +16,8 @@ android {
         applicationId = "com.admoss.downloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.12.0"
+        versionCode = 20
+        versionName = "1.16.0"
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
         resourceConfigurations += listOf("en", "ar")
     }
@@ -87,12 +87,13 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
     implementation("androidx.core:core-ktx:1.13.1")
+    // Offline sharing: QR codes (ZXing) and the camera preview (CameraX)
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
 
     // yt-dlp + ffmpeg for Android (YouTube, TikTok and many more sites)
     implementation("io.github.junkfood02.youtubedl-android:library:0.17.2")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2")
-
-    // QR code scanner and generator for offline sharing
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    implementation("com.google.zxing:core:3.5.3")
 }

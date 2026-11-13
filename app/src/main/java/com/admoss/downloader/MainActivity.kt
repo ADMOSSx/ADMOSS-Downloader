@@ -49,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -58,6 +59,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -66,13 +68,15 @@ import androidx.core.content.ContextCompat
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ---------- colors & theme ----------
 
-internal val Pink = Color(0xFFE0524B)   // cancel / delete
-internal val Green = Color(0xFF3E9B6B)  // done
-internal val Red = Color(0xFFD64545)    // errors
+private val Pink = Color(0xFFE0524B)   // cancel / delete
+private val Green = Color(0xFF3E9B6B)  // done
+private val Red = Color(0xFFD64545)    // errors
 private val Orange = Color(0xFFD08A2E) // warnings
 
 class Palette(
@@ -117,7 +121,7 @@ private val LightPalette = Palette(
     nav = Color(0xFFFBF9F5)
 )
 
-internal val LocalPalette = staticCompositionLocalOf { DarkPalette }
+private val LocalPalette = staticCompositionLocalOf { DarkPalette }
 
 /** Remembers the dark / light choice (null = follow the phone). */
 object ThemeSettings {
@@ -217,7 +221,7 @@ fun AdmossRoot(getVm: () -> DownloadViewModel) {
 
 // ---------- helpers ----------
 
-internal fun formatSize(bytes: Long): String = when {
+private fun formatSize(bytes: Long): String = when {
     bytes <= 0L -> "Size unknown"
     bytes >= (1L shl 30) -> String.format(Locale.US, "%.2f GB", bytes / 1073741824.0)
     else -> String.format(Locale.US, "%.1f MB", bytes / 1048576.0)
@@ -231,7 +235,7 @@ private fun formatDuration(sec: Long): String {
     else String.format(Locale.US, "%d:%02d", m, s)
 }
 
-internal fun formatEta(seconds: Long): String {
+private fun formatEta(seconds: Long): String {
     val m = seconds / 60
     val s = seconds % 60
     return if (m > 0) "${m}m ${s}s" else "${s}s"
@@ -248,7 +252,7 @@ private fun platformOf(url: String): String? {
 }
 
 @Composable
-internal fun Ico(@DrawableRes id: Int, tint: Color, size: Dp = 24.dp, desc: String? = null) {
+private fun Ico(@DrawableRes id: Int, tint: Color, size: Dp = 24.dp, desc: String? = null) {
     Icon(
         painter = painterResource(id),
         contentDescription = desc,
@@ -274,7 +278,7 @@ private fun GlassCard(modifier: Modifier = Modifier, content: @Composable Column
 }
 
 @Composable
-internal fun Pill(text: String, color: Color) {
+private fun Pill(text: String, color: Color) {
     Box(
         Modifier
             .clip(RoundedCornerShape(8.dp))
@@ -319,7 +323,8 @@ private fun AdmossApp(vm: DownloadViewModel) {
             when (tab) {
                 0 -> DownloadTab(vm)
                 1 -> LibraryTab()
-                2 -> ShareTab()
+                2 -> SeriesTab()
+                4 -> OmsTab()
                 else -> SettingsTab()
             }
         }
@@ -344,8 +349,11 @@ private fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
         NavItem("Library", R.drawable.ic_library, selected == 1, 0, Modifier.weight(1f)) {
             onSelect(1)
         }
-        NavItem("Share", R.drawable.ic_send, selected == 2, 0, Modifier.weight(1f)) {
+        NavItem("Series", R.drawable.ic_series, selected == 2, 0, Modifier.weight(1f)) {
             onSelect(2)
+        }
+        NavItem("Share", R.drawable.ic_share, selected == 4, 0, Modifier.weight(1f)) {
+            onSelect(4)
         }
         NavItem("Settings", R.drawable.ic_settings, selected == 3, 0, Modifier.weight(1f)) {
             onSelect(3)
@@ -744,28 +752,16 @@ private fun SettingsTab() {
                 Text("Where your files are saved", color = p.text, fontWeight = FontWeight.Medium, fontSize = 15.sp)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Videos: Movies/ADMOSS\nMusic: Music/ADMOSS\nPhotos: Pictures/ADMOSS\nReceived with Share: ADMOSS Share folders",
+                    "Videos: Movies/ADMOSS\nMusic: Music/ADMOSS\nPhotos: Pictures/ADMOSS",
                     color = p.sub,
                     fontSize = 13.sp
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Deleting a download in the Library also deletes the file from your phone, after you confirm.",
+                    "Deleting a download in the Library also deletes the file from your phone, after you confirm. Videos you added from your phone are only removed from the app.",
                     color = p.sub,
                     fontSize = 12.sp
                 )
-            }
-        }
-
-        item { SettingsHeading("Share the app") }
-        item {
-            GlassCard {
-                Text("Share ADMOSS Downloader", color = p.text, fontWeight = FontWeight.Medium, fontSize = 15.sp)
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SmallAction("Link", R.drawable.ic_share, Modifier.weight(1f)) { Share.appLink(context) }
-                    SmallAction("APK file", R.drawable.ic_share, Modifier.weight(1f)) { Share.appFile(context) }
-                }
             }
         }
 
@@ -996,6 +992,13 @@ private fun PlaylistHeader(vm: DownloadViewModel, pl: PlaylistInfo) {
                 )
                 val by = if (pl.uploader.isNotBlank()) "  •  ${pl.uploader}" else ""
                 Text("${pl.entries.size} videos$by", color = p.sub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (pl.hiddenCount > 0) {
+                    Text(
+                        "Only the first ${pl.entries.size} are shown (${pl.hiddenCount} more not loaded).",
+                        color = Orange,
+                        fontSize = 12.sp
+                    )
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -1591,6 +1594,13 @@ private fun hasMediaPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
 
+/** True when the file can still be opened (a phone video may have been deleted or moved). */
+private fun uriReadable(context: Context, uriText: String): Boolean = try {
+    context.contentResolver.openAssetFileDescriptor(Uri.parse(uriText), "r")?.use { true } ?: false
+} catch (e: Throwable) {
+    false
+}
+
 private fun itemMeta(item: HistoryItem): String {
     val kind = when {
         item.photoUris.isNotEmpty() -> {
@@ -1655,7 +1665,12 @@ private fun SmallAction(label: String, @DrawableRes icon: Int, modifier: Modifie
 }
 
 @Composable
-private fun RenameDialog(current: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+private fun RenameDialog(
+    current: String,
+    onDone: (String) -> Unit,
+    onDismiss: () -> Unit,
+    title: String = "Rename playlist"
+) {
     var text by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1787,9 +1802,37 @@ private fun LibraryTab() {
         }
     }
 
+    // Videos that are already on the phone: picked with Android's file picker, never copied or moved
+    var phoneTarget by remember { mutableStateOf<String?>(null) }
+    var phoneSeason by remember { mutableStateOf<String?>(null) }
+    var addPhoneFolder by remember { mutableStateOf<String?>(null) }
+    var showNewFromPhone by remember { mutableStateOf(false) }
+    val phoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { picked ->
+        val target = phoneTarget
+        phoneTarget = null
+        if (target != null && picked.isNotEmpty()) {
+            picked.forEach {
+                try {
+                    context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Throwable) {
+                    // some pickers only give a temporary permission
+                }
+            }
+            DownloadCenter.addFromPhoneAsync(context, target, picked, phoneSeason) { n ->
+                Toast.makeText(
+                    context,
+                    if (n == 0) "These are already in your library." else "Added $n to \"$target\".",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            openName = target
+            scope.launch { pagerState.scrollToPage(4) }
+        }
+    }
+
     // After a reinstall the list is empty: bring the files back by themselves if access was already given
     LaunchedEffect(Unit) {
-        if (DownloadCenter.history.isEmpty() && hasMediaPermission(context)) {
+        if (DownloadCenter.downloads.isEmpty() && hasMediaPermission(context)) {
             DownloadCenter.restoreAsync(context, true)
         }
     }
@@ -1799,9 +1842,33 @@ private fun LibraryTab() {
 
     val name = openName
     if (name != null) {
-        PlaylistDetail(name, onBack = { openName = null }, onRenamed = { openName = it })
+        PlaylistDetail(
+            name,
+            onBack = { openName = null },
+            onRenamed = { openName = it },
+            onAddFromPhone = { n -> addPhoneFolder = n },
+            onAddToSeason = { f, s ->
+                phoneTarget = f
+                phoneSeason = s
+                phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+            }
+        )
+        addPhoneFolder?.let { f ->
+            PhoneAddDialog(
+                askFolder = false,
+                folder = f,
+                season = DownloadCenter.nextSeasonName(f),
+                onDone = { _, s ->
+                    addPhoneFolder = null
+                    phoneTarget = f
+                    phoneSeason = s
+                    phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+                },
+                onDismiss = { addPhoneFolder = null }
+            )
+        }
     } else {
-        val all = DownloadCenter.history
+        val all = DownloadCenter.downloads
         val videos = all.filter { !it.audio && it.photoUris.isEmpty() }
         val music = all.filter { it.audio && it.photoUris.isEmpty() }
         val photos = all.filter { it.photoUris.isNotEmpty() }
@@ -1820,6 +1887,21 @@ private fun LibraryTab() {
                     scope.launch { pagerState.scrollToPage(4) }
                 },
                 onDismiss = { showNew = false }
+            )
+        }
+
+        if (showNewFromPhone) {
+            PhoneAddDialog(
+                askFolder = true,
+                folder = "",
+                season = "S1",
+                onDone = { f, s ->
+                    showNewFromPhone = false
+                    phoneTarget = f
+                    phoneSeason = s
+                    phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+                },
+                onDismiss = { showNewFromPhone = false }
             )
         }
 
@@ -1857,9 +1939,6 @@ private fun LibraryTab() {
                         )
                         TextButton(onClick = { selected = all.map { it.uri }.toSet() }) {
                             Text("Select all", color = p.accent)
-                        }
-                        IconButton(onClick = { if (picked.isNotEmpty()) Share.items(context, picked) }) {
-                            Ico(R.drawable.ic_share, p.text, 24.dp, "Share selected")
                         }
                         IconButton(onClick = { if (picked.isNotEmpty()) confirmDelete = picked }) {
                             Ico(R.drawable.ic_delete, Pink, 24.dp, "Delete selected")
@@ -1989,6 +2068,7 @@ private fun LibraryTab() {
                     query = query,
                     onOpenPlaylist = { openName = it },
                     onNewPlaylist = { showNew = true },
+                    onNewFromPhone = { showNewFromPhone = true },
                     selected = selected,
                     onToggle = { uri -> selected = if (uri in selected) selected - uri else selected + uri },
                     onLongPress = { uri -> selected = selected + uri },
@@ -2006,6 +2086,7 @@ private fun LibraryPage(
     query: String,
     onOpenPlaylist: (String) -> Unit,
     onNewPlaylist: () -> Unit,
+    onNewFromPhone: () -> Unit,
     selected: Set<String>,
     onToggle: (String) -> Unit,
     onLongPress: (String) -> Unit,
@@ -2013,7 +2094,7 @@ private fun LibraryPage(
 ) {
     val p = LocalPalette.current
     val context = LocalContext.current
-    val all = DownloadCenter.history
+    val all = DownloadCenter.downloads
     // Worked out again only when the list or the search text changes, so scrolling stays smooth
     val groups = remember(all) { all.filter { it.playlist != null }.groupBy { it.playlist ?: "" } }
     val groupNames = remember(groups, query) {
@@ -2059,7 +2140,7 @@ private fun LibraryPage(
                 }
             }
             items(groupNames, key = { it }) { groupName ->
-                val list = (groups[groupName] ?: emptyList()).sortedBy { it.index }
+                val list = DownloadCenter.playOrder(groups[groupName] ?: emptyList())
                 if (gridView) {
                     PlaylistGridCard(
                         name = groupName,
@@ -2337,14 +2418,54 @@ private fun PlaylistCard(name: String, videos: List<HistoryItem>, onOpen: () -> 
 }
 
 @Composable
-private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String) -> Unit) {
+private fun PlaylistDetail(
+    name: String,
+    onBack: () -> Unit,
+    onRenamed: (String) -> Unit,
+    onAddFromPhone: (String) -> Unit,
+    onAddToSeason: (String, String) -> Unit
+) {
     val p = LocalPalette.current
     val context = LocalContext.current
-    val all = DownloadCenter.history
-    val videos = all.filter { it.playlist == name }.sortedBy { it.index }
+    val all = DownloadCenter.downloads
+    val videos = DownloadCenter.playOrder(all.filter { it.playlist == name })
     var showRename by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
+    var seasonToRename by remember { mutableStateOf<String?>(null) }
+    var seasonToRemove by remember { mutableStateOf<String?>(null) }
+    var collapsed by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    seasonToRename?.let { old ->
+        RenameDialog(
+            current = old,
+            title = "Rename season",
+            onDone = { n ->
+                DownloadCenter.renameSeason(context, name, old, n)
+                seasonToRename = null
+            },
+            onDismiss = { seasonToRename = null }
+        )
+    }
+    seasonToRemove?.let { s ->
+        AlertDialog(
+            onDismissRequest = { seasonToRemove = null },
+            title = { Text("Remove \"$s\"?") },
+            text = {
+                Text(
+                    "The episodes are removed from the app only. Their files stay on your phone.",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    DownloadCenter.removeSeason(context, name, s)
+                    seasonToRemove = null
+                }) { Text("Remove", color = Pink, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = { TextButton(onClick = { seasonToRemove = null }) { Text("Cancel") } }
+        )
+    }
 
     if (showRename) {
         RenameDialog(
@@ -2438,7 +2559,12 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
                     Modifier.weight(1f)
                 )
                 StatCard(totalSizeText(videos), "Total size", Modifier.weight(1f))
-                StatCard("${videos.count { it.audio }}", "Audio files", Modifier.weight(1f))
+                val seasonCount = videos.mapNotNull { it.season }.distinct().size
+                if (seasonCount > 0) {
+                    StatCard("$seasonCount", if (seasonCount == 1) "Season" else "Seasons", Modifier.weight(1f))
+                } else {
+                    StatCard("${videos.count { it.audio }}", "Audio files", Modifier.weight(1f))
+                }
             }
         }
 
@@ -2500,21 +2626,59 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
             }
         }
 
-        if (videos.isNotEmpty()) {
-            item {
-                SmallAction("Share all ${videos.size}", R.drawable.ic_share, Modifier.fillMaxWidth()) {
-                    Share.items(context, videos)
-                }
-            }
-        }
+        // (videos from the phone now live in the Series tab)
 
-        itemsIndexed(videos, key = { _, v -> v.uri }) { i, v ->
+        // Episodes without a season first, then one section for each season
+        val plain = videos.filter { it.season == null }
+        itemsIndexed(plain, key = { _, v -> v.uri }) { i, v ->
             PlaylistVideoRow(
                 number = i + 1,
                 item = v,
-                onPlay = { playItems(context, videos, i, name) },
+                onPlay = { playItems(context, videos, videos.indexOf(v), name) },
                 onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
             )
+        }
+        val seasonList = videos.mapNotNull { it.season }.distinct()
+        if (seasonList.size > 1) {
+            item(key = "season-toggle-all") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { collapsed = emptySet() }) { Text("Show all", color = p.accent) }
+                    TextButton(onClick = { collapsed = seasonList.toSet() }) { Text("Hide all", color = p.sub) }
+                }
+            }
+        }
+        seasonList.forEach { s ->
+            val eps = videos.filter { it.season == s }
+            val isOpen = s !in collapsed
+            val sizeText = totalSizeText(eps)
+            val subtitle = (if (eps.size == 1) "1 episode" else "${eps.size} episodes") +
+                (if (sizeText == "-") "" else "  •  $sizeText")
+            item(key = "season-$s") {
+                Box(Modifier.animateItemPlacement()) {
+                    SeasonCard(
+                        name = s,
+                        subtitle = subtitle,
+                        open = isOpen,
+                        onToggle = { collapsed = if (isOpen) collapsed + s else collapsed - s },
+                        onPlay = { playItems(context, eps, 0, name + " • " + s) },
+                        onAdd = { onAddToSeason(name, s) },
+                        onRename = { seasonToRename = s },
+                        onRemove = { seasonToRemove = s }
+                    )
+                }
+            }
+            if (isOpen) {
+                itemsIndexed(eps, key = { _, v -> v.uri }) { i, v ->
+                    Box(Modifier.animateItemPlacement().padding(start = 14.dp)) {
+                        PlaylistVideoRow(
+                            number = i + 1,
+                            item = v,
+                            onPlay = { playItems(context, videos, videos.indexOf(v), name) },
+                            onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
+                        )
+                    }
+                }
+            }
         }
 
         item {
@@ -2530,6 +2694,672 @@ private fun PlaylistDetail(name: String, onBack: () -> Unit, onRenamed: (String)
                         Text("Delete all files in this playlist", color = Pink)
                     }
                 }
+            }
+        }
+    }
+}
+
+/** One season of a folder: tap to show or hide its episodes. "+" adds videos, the big button plays it. */
+@Composable
+private fun SeasonCard(
+    name: String,
+    subtitle: String,
+    open: Boolean,
+    onToggle: () -> Unit,
+    onPlay: () -> Unit,
+    onAdd: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val p = LocalPalette.current
+    val angle by animateFloatAsState(if (open) 0f else -90f, tween(200), label = "season-arrow")
+    var menu by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (open) p.accent.copy(alpha = 0.10f) else p.card)
+            .border(1.dp, if (open) p.accent.copy(alpha = 0.45f) else p.border, shape)
+            .clickable { onToggle() }
+            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_expand),
+            contentDescription = if (open) "Hide episodes" else "Show episodes",
+            tint = if (open) p.accent else p.sub,
+            modifier = Modifier
+                .size(26.dp)
+                .rotate(angle)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                color = p.text,
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(subtitle, color = p.sub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = onAdd) { Ico(R.drawable.ic_add, p.accent, 24.dp, "Add videos to this season") }
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(p.accent)
+                .clickable { onPlay() },
+            contentAlignment = Alignment.Center
+        ) {
+            Ico(R.drawable.ic_play, p.onAccent, 22.dp, "Play this season")
+        }
+        Box {
+            IconButton(onClick = { menu = true }) { Ico(R.drawable.ic_more, p.sub, 22.dp, "Season options") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Add videos") },
+                    onClick = {
+                        menu = false
+                        onAdd()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Rename season") },
+                    onClick = {
+                        menu = false
+                        onRename()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Remove season from the app", color = Pink) },
+                    onClick = {
+                        menu = false
+                        onRemove()
+                    }
+                )
+            }
+        }
+    }
+}
+
+// ---------- Series tab: videos that are already on the phone ----------
+
+@Composable
+private fun SeriesTab() {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+    var openName by rememberSaveable { mutableStateOf<String?>(null) }
+    var showNew by remember { mutableStateOf(false) }
+    var phoneTarget by remember { mutableStateOf<String?>(null) }
+    var phoneSeason by remember { mutableStateOf<String?>(null) }
+
+    // Android's file picker: nothing is copied or moved, the app only remembers where each file is
+    val phoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { picked ->
+        val target = phoneTarget
+        phoneTarget = null
+        if (target != null && picked.isNotEmpty()) {
+            picked.forEach {
+                try {
+                    context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Throwable) {
+                    // some pickers only give a temporary permission
+                }
+            }
+            DownloadCenter.addFromPhoneAsync(context, target, picked, phoneSeason) { n ->
+                Toast.makeText(
+                    context,
+                    if (n == 0) "These are already in your series." else "Added $n to \"$target\".",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            openName = target
+        }
+    }
+
+    fun pick(folder: String, season: String?) {
+        phoneTarget = folder
+        phoneSeason = season
+        phoneLauncher.launch(arrayOf("video/*", "audio/*"))
+    }
+
+    BackHandler(enabled = openName != null) { openName = null }
+
+    val current = openName
+    if (current != null) {
+        SeriesDetail(
+            name = current,
+            onBack = { openName = null },
+            onRenamed = { openName = it },
+            onPick = { season -> pick(current, season) }
+        )
+        return
+    }
+
+    val items = DownloadCenter.phoneItems
+    val groups = items.groupBy { it.playlist ?: "" }
+    val sizeText = totalSizeText(items)
+
+    if (showNew) {
+        PhoneAddDialog(
+            askFolder = true,
+            folder = "",
+            season = "S1",
+            onDone = { f, s ->
+                showNew = false
+                pick(f, s)
+            },
+            onDismiss = { showNew = false }
+        )
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    Text("Series", color = p.text, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                    Text(
+                        if (groups.isEmpty()) {
+                            "Your own videos, organized"
+                        } else {
+                            "${groups.size} series  •  ${items.size} episodes" +
+                                (if (sizeText != "-") "  •  $sizeText" else "")
+                        },
+                        color = p.sub,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+            if (groups.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) { SeriesEmpty { showNew = true } }
+            }
+            items(groups.keys.toList(), key = { it }) { folder ->
+                val eps = DownloadCenter.playOrder(groups[folder] ?: emptyList())
+                SeriesCard(
+                    name = folder,
+                    eps = eps,
+                    onOpen = { openName = folder },
+                    onPlay = { playItems(context, eps, 0, folder) }
+                )
+            }
+        }
+
+        if (groups.isNotEmpty()) {
+            Row(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(20.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(p.accent)
+                    .clickable { showNew = true }
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Ico(R.drawable.ic_add, p.onAccent, 22.dp)
+                Spacer(Modifier.width(6.dp))
+                Text("New series", color = p.onAccent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SeriesEmpty(onCreate: () -> Unit) {
+    val p = LocalPalette.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier
+                .size(96.dp)
+                .clip(CircleShape)
+                .background(p.accent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Ico(R.drawable.ic_series, p.accent, 46.dp)
+        }
+        Spacer(Modifier.height(18.dp))
+        Text("Your own series", color = p.text, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Make a folder like Wednesday, add seasons, then add the episodes from your phone. " +
+                "Your files are never copied, moved or deleted.",
+            color = p.sub,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+        Spacer(Modifier.height(20.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(p.accent)
+                .clickable { onCreate() }
+                .padding(horizontal = 24.dp, vertical = 14.dp)
+        ) {
+            Text("Create your first series", color = p.onAccent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+        }
+    }
+}
+
+/** A poster: the cover of the first episode, the name, and a play button. */
+@Composable
+private fun SeriesCard(name: String, eps: List<HistoryItem>, onOpen: () -> Unit, onPlay: () -> Unit) {
+    val p = LocalPalette.current
+    val shape = RoundedCornerShape(18.dp)
+    val seasons = eps.mapNotNull { it.season }.distinct().size
+    val line = (if (seasons > 0) (if (seasons == 1) "1 season" else "$seasons seasons") + "  •  " else "") +
+        (if (eps.size == 1) "1 episode" else "${eps.size} episodes")
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(3f / 4f)
+            .clip(shape)
+            .border(1.dp, p.border, shape)
+            .clickable { onOpen() }
+    ) {
+        Thumb(
+            eps.firstOrNull { !it.thumb.isNullOrBlank() }?.thumb,
+            Modifier.fillMaxSize(),
+            R.drawable.ic_series,
+            44.dp
+        )
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(0.6f)
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))))
+        )
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(12.dp)
+        ) {
+            Text(
+                name,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(line, color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
+        }
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(p.accent)
+                .clickable { onPlay() },
+            contentAlignment = Alignment.Center
+        ) {
+            Ico(R.drawable.ic_play, p.onAccent, 22.dp, "Play")
+        }
+    }
+}
+
+/** One series: cover, numbers, play, and a card for each season that opens or hides its episodes. */
+@Composable
+private fun SeriesDetail(
+    name: String,
+    onBack: () -> Unit,
+    onRenamed: (String) -> Unit,
+    onPick: (String?) -> Unit
+) {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+    val videos = DownloadCenter.playOrder(DownloadCenter.history.filter { it.external && it.playlist == name })
+    var showRename by remember { mutableStateOf(false) }
+    var showAddSeason by remember { mutableStateOf(false) }
+    var showRemove by remember { mutableStateOf(false) }
+    var seasonToRename by remember { mutableStateOf<String?>(null) }
+    var seasonToRemove by remember { mutableStateOf<String?>(null) }
+    var collapsed by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    if (showRename) {
+        RenameDialog(
+            current = name,
+            title = "Rename series",
+            onDone = { n ->
+                DownloadCenter.renameFolder(context, name, n)
+                showRename = false
+                onRenamed(n.trim())
+            },
+            onDismiss = { showRename = false }
+        )
+    }
+    if (showAddSeason) {
+        PhoneAddDialog(
+            askFolder = false,
+            folder = name,
+            season = DownloadCenter.nextSeasonName(name),
+            onDone = { _, s ->
+                showAddSeason = false
+                onPick(s)
+            },
+            onDismiss = { showAddSeason = false }
+        )
+    }
+    seasonToRename?.let { old ->
+        RenameDialog(
+            current = old,
+            title = "Rename season",
+            onDone = { n ->
+                DownloadCenter.renameSeason(context, name, old, n)
+                seasonToRename = null
+            },
+            onDismiss = { seasonToRename = null }
+        )
+    }
+    seasonToRemove?.let { s ->
+        AlertDialog(
+            onDismissRequest = { seasonToRemove = null },
+            title = { Text("Remove \"$s\"?") },
+            text = {
+                Text(
+                    "The episodes are removed from the app only. Their files stay on your phone.",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    DownloadCenter.removeSeason(context, name, s)
+                    seasonToRemove = null
+                }) { Text("Remove", color = Pink, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = { TextButton(onClick = { seasonToRemove = null }) { Text("Cancel") } }
+        )
+    }
+    if (showRemove) {
+        AlertDialog(
+            onDismissRequest = { showRemove = false },
+            title = { Text("Remove \"${cutText(name, 40)}\"?") },
+            text = {
+                Text(
+                    "This series is removed from the app only. Your video files stay on your phone.",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRemove = false
+                    DownloadCenter.removeFolder(context, name)
+                    onBack()
+                }) { Text("Remove", color = Pink, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = { TextButton(onClick = { showRemove = false }) { Text("Cancel") } }
+        )
+    }
+
+    val seasonList = videos.mapNotNull { it.season }.distinct()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Ico(R.drawable.ic_back, p.text, 24.dp, "Back") }
+                Text("Series", color = p.sub, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        item {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(18.dp))
+            ) {
+                Thumb(
+                    videos.firstOrNull { !it.thumb.isNullOrBlank() }?.thumb,
+                    Modifier.fillMaxSize(),
+                    R.drawable.ic_series,
+                    56.dp
+                )
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(130.dp)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                )
+                Text(
+                    name,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(16.dp)
+                )
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatCard("${seasonList.size}", if (seasonList.size == 1) "Season" else "Seasons", Modifier.weight(1f))
+                StatCard("${videos.size}", if (videos.size == 1) "Episode" else "Episodes", Modifier.weight(1f))
+                StatCard(totalSizeText(videos), "Total size", Modifier.weight(1f))
+            }
+        }
+
+        if (videos.isNotEmpty()) {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(p.accent)
+                            .clickable { playItems(context, videos, 0, name) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Ico(R.drawable.ic_play, p.onAccent, 22.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Play all", color = p.onAccent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.5.dp, p.accent, RoundedCornerShape(12.dp))
+                            .clickable { playItems(context, videos.shuffled(), 0, name) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Ico(R.drawable.ic_shuffle, p.accent, 22.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Shuffle", color = p.accent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
+                    }
+                }
+            }
+        } else {
+            item {
+                Text("This series is empty. Tap Add season to put episodes in it.", color = p.sub, fontSize = 14.sp)
+            }
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SmallAction("Add season", R.drawable.ic_add, Modifier.weight(1f)) { showAddSeason = true }
+                SmallAction("Rename", R.drawable.ic_edit, Modifier.weight(1f)) { showRename = true }
+            }
+        }
+
+        // Episodes without a season first, then one card for each season
+        val plain = videos.filter { it.season == null }
+        itemsIndexed(plain, key = { _, v -> v.uri }) { i, v ->
+            PlaylistVideoRow(
+                number = i + 1,
+                item = v,
+                onPlay = { playItems(context, videos, videos.indexOf(v), name) },
+                onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
+            )
+        }
+        if (seasonList.size > 1) {
+            item(key = "season-toggle-all") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { collapsed = emptySet() }) { Text("Show all", color = p.accent) }
+                    TextButton(onClick = { collapsed = seasonList.toSet() }) { Text("Hide all", color = p.sub) }
+                }
+            }
+        }
+        seasonList.forEach { s ->
+            val eps = videos.filter { it.season == s }
+            val isOpen = s !in collapsed
+            val sizeText = totalSizeText(eps)
+            val subtitle = (if (eps.size == 1) "1 episode" else "${eps.size} episodes") +
+                (if (sizeText == "-") "" else "  •  $sizeText")
+            item(key = "season-$s") {
+                Box(Modifier.animateItemPlacement()) {
+                    SeasonCard(
+                        name = s,
+                        subtitle = subtitle,
+                        open = isOpen,
+                        onToggle = { collapsed = if (isOpen) collapsed + s else collapsed - s },
+                        onPlay = { playItems(context, eps, 0, name + " • " + s) },
+                        onAdd = { onPick(s) },
+                        onRename = { seasonToRename = s },
+                        onRemove = { seasonToRemove = s }
+                    )
+                }
+            }
+            if (isOpen) {
+                itemsIndexed(eps, key = { _, v -> v.uri }) { i, v ->
+                    Box(Modifier.animateItemPlacement().padding(start = 14.dp)) {
+                        PlaylistVideoRow(
+                            number = i + 1,
+                            item = v,
+                            onPlay = { playItems(context, videos, videos.indexOf(v), name) },
+                            onRemove = { DownloadCenter.removeFromPlaylist(context, v) }
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            TextButton(onClick = { showRemove = true }) {
+                Text("Remove this series from the app", color = Pink)
+            }
+        }
+    }
+}
+
+/** Asks for the folder name (when it is new) and the season, then the file picker opens. */
+@Composable
+private fun PhoneAddDialog(
+    askFolder: Boolean,
+    folder: String,
+    season: String,
+    onDone: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var f by remember { mutableStateOf(folder) }
+    var s by remember { mutableStateOf(season) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (askFolder) "New folder from phone" else "Add from phone") },
+        text = {
+            Column {
+                if (askFolder) {
+                    OutlinedTextField(
+                        value = f,
+                        onValueChange = { f = it },
+                        singleLine = true,
+                        label = { Text("Folder name (for example Wednesday)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+                OutlinedTextField(
+                    value = s,
+                    onValueChange = { s = it },
+                    singleLine = true,
+                    label = { Text("Season (optional, for example S1)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onDone(f.trim(), s.trim()) }, enabled = f.isNotBlank()) {
+                Text("Choose videos")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/** The title of one season inside a folder, with play and a small menu. */
+@Composable
+private fun SeasonHeader(
+    name: String,
+    count: Int,
+    onPlay: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val p = LocalPalette.current
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                color = p.text,
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(if (count == 1) "1 episode" else "$count episodes", color = p.sub, fontSize = 12.sp)
+        }
+        IconButton(onClick = onPlay) { Ico(R.drawable.ic_play, p.accent, 26.dp, "Play this season") }
+        Box {
+            IconButton(onClick = { menu = true }) { Ico(R.drawable.ic_edit, p.sub, 20.dp, "Season options") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename season") },
+                    onClick = {
+                        menu = false
+                        onRename()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Remove season from the app", color = Pink) },
+                    onClick = {
+                        menu = false
+                        onRemove()
+                    }
+                )
             }
         }
     }
@@ -2582,12 +3412,20 @@ private fun PlaylistVideoRow(number: Int, item: HistoryItem, onPlay: () -> Unit,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+            val rowContext = LocalContext.current
+            val missing by produceState(initialValue = false, item.uri) {
+                value = item.external && withContext(Dispatchers.IO) { !uriReadable(rowContext, item.uri) }
+            }
             val kind = if (item.audio) "Audio" else "Video"
-            Text(
-                if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
-                color = p.sub,
-                fontSize = 11.sp
-            )
+            if (missing) {
+                Text("File not found on the phone", color = Red, fontSize = 11.sp)
+            } else {
+                Text(
+                    if (item.size > 0) "$kind  •  ${formatSize(item.size)}" else kind,
+                    color = p.sub,
+                    fontSize = 11.sp
+                )
+            }
         }
         IconButton(onClick = onRemove) {
             Ico(R.drawable.ic_close, p.sub, 20.dp, "Remove from this playlist")
@@ -2605,7 +3443,6 @@ private fun HistoryRow(
     onLongClick: () -> Unit = {}
 ) {
     val p = LocalPalette.current
-    val context = LocalContext.current
     val shape = RoundedCornerShape(12.dp)
     Row(
         Modifier
@@ -2650,9 +3487,6 @@ private fun HistoryRow(
             )
             Spacer(Modifier.width(8.dp))
         } else {
-            IconButton(onClick = { Share.items(context, listOf(item)) }) {
-                Ico(R.drawable.ic_share, p.sub, 20.dp, "Share")
-            }
             IconButton(onClick = onRemove) {
                 Ico(R.drawable.ic_delete, p.sub, 20.dp, "Delete")
             }
@@ -2684,6 +3518,14 @@ private fun DeleteDialog(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text("You can't undo this.", color = p.sub, fontSize = 13.sp)
+                if (items.any { it.external }) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Videos added from your phone are only removed from the app. Their files stay on your phone.",
+                        color = p.sub,
+                        fontSize = 13.sp
+                    )
+                }
                 Spacer(Modifier.height(6.dp))
                 TextButton(onClick = onRemoveFromList) {
                     Text("Only remove from the list", color = p.accent)
