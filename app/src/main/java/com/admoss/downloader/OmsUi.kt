@@ -9,7 +9,10 @@ import android.os.Looper
 import android.util.Size
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.annotation.DrawableRes
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -32,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -55,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -379,7 +384,7 @@ private fun OmsPick(l: OmsLook) {
         allowed = omsHasAny(context, OmsMedia.permissions())
     }
     val items by produceState(initialValue = emptyList<OmsMediaItem>(), kind, allowed) {
-        value = if (allowed) withContext(Dispatchers.IO) { OmsMedia.load(context, kind) } else emptyList()
+        value = if (allowed && kind != 3) withContext(Dispatchers.IO) { OmsMedia.load(context, kind) } else emptyList()
     }
     val selected = OmsCenter.selected
     val chosen = remember(selected) { selected.map { it.uri }.toHashSet() }
@@ -402,11 +407,16 @@ private fun OmsPick(l: OmsLook) {
                 val tabs = listOf(
                     Triple("Photos", R.drawable.ic_photo, OmsProtocol.KIND_PHOTO),
                     Triple("Videos", R.drawable.ic_video, OmsProtocol.KIND_VIDEO),
-                    Triple("Music", R.drawable.ic_music, OmsProtocol.KIND_MUSIC)
+                    Triple("Music", R.drawable.ic_music, OmsProtocol.KIND_MUSIC),
+                    Triple("Series", R.drawable.ic_series, 3)
                 )
                 tabs.forEach { t ->
                     val on = kind == t.third
-                    val count = selected.count { it.kind == t.third }
+                    val count = if (t.third == 3) {
+                        selected.count { it.series.isNotEmpty() }
+                    } else {
+                        selected.count { it.kind == t.third && it.series.isEmpty() }
+                    }
                     Row(
                         Modifier
                             .weight(1f)
@@ -417,13 +427,14 @@ private fun OmsPick(l: OmsLook) {
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        OmsIcon(t.second, if (on) l.onAccent else l.sub, 18.dp)
-                        Spacer(Modifier.width(6.dp))
+                        OmsIcon(t.second, if (on) l.onAccent else l.sub, 16.dp)
+                        Spacer(Modifier.width(4.dp))
                         Text(
                             if (count > 0) "${t.first} $count" else t.first,
                             color = if (on) l.onAccent else l.sub,
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp
+                            fontSize = 12.sp,
+                            maxLines = 1
                         )
                     }
                 }
@@ -433,6 +444,7 @@ private fun OmsPick(l: OmsLook) {
 
         Box(Modifier.weight(1f)) {
             when {
+                kind == 3 -> OmsSeriesPicker(l)
                 !allowed -> Column(
                     Modifier
                         .fillMaxSize()
@@ -583,6 +595,28 @@ private fun OmsReview(l: OmsLook) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            val seriesLines = omsSelectionSeries(selected)
+            if (seriesLines.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    val cardShape = RoundedCornerShape(14.dp)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(cardShape)
+                            .background(l.accent.copy(alpha = 0.10f))
+                            .border(1.dp, l.accent.copy(alpha = 0.4f), cardShape)
+                            .padding(12.dp)
+                    ) {
+                        Text("From your Series tab", color = l.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        seriesLines.forEach { Text(it, color = l.text, fontSize = 13.sp) }
+                        Text(
+                            "The other phone gets them in its own Series tab, with the same seasons and order.",
+                            color = l.sub,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
             items(selected, key = { it.uri.toString() }) { item ->
                 Box(
                     Modifier
@@ -938,8 +972,19 @@ private fun OmsTransferScreen(l: OmsLook) {
                     textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(omsCountLine(files.map { it.kind }), color = l.accent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                val seriesInfo = omsRequestSeries(files)
+                if (seriesInfo.isNotEmpty()) {
+                    seriesInfo.forEach {
+                        Text(it, color = l.accent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, textAlign = TextAlign.Center)
+                    }
+                } else {
+                    Text(omsCountLine(files.map { it.kind }), color = l.accent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                }
                 Text(omsSize(OmsCenter.totalBytes), color = l.sub, fontSize = 13.sp)
+                OmsCenter.requestNote?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(it, color = OmsGreen, fontSize = 12.sp, textAlign = TextAlign.Center)
+                }
                 Spacer(Modifier.height(16.dp))
                 val shape = RoundedCornerShape(14.dp)
                 Column(
@@ -1092,5 +1137,249 @@ private fun OmsStat(value: String, label: String, l: OmsLook) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, color = l.text, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
         Text(label, color = l.sub, fontSize = 11.sp)
+    }
+}
+
+
+// ---------- series ----------
+
+private fun omsSelectionSeries(items: List<OmsMediaItem>): List<String> =
+    items.filter { it.series.isNotEmpty() }.groupBy { it.series }.map { (name, list) ->
+        val seasons = list.map { it.season }.filter { it.isNotEmpty() }.distinct()
+        name + (if (seasons.isNotEmpty()) "  •  " + seasons.joinToString(", ") else "") +
+            "  •  " + (if (list.size == 1) "1 episode" else "${list.size} episodes") +
+            "  •  " + omsSize(list.sumOf { it.size })
+    }
+
+private fun omsRequestSeries(files: List<OmsFile>): List<String> =
+    files.filter { it.series.isNotEmpty() }.groupBy { it.series }.map { (name, list) ->
+        val seasons = list.map { it.season }.filter { it.isNotEmpty() }.distinct()
+        name + (if (seasons.isNotEmpty()) "  •  " + seasons.joinToString(", ") else "") +
+            "  •  " + (if (list.size == 1) "1 episode" else "${list.size} episodes")
+    }
+
+private fun omsGroupLine(list: List<HistoryItem>, seasons: Int): String {
+    val size = list.sumOf { it.size }
+    return (if (seasons > 0) (if (seasons == 1) "1 season  •  " else "$seasons seasons  •  ") else "") +
+        (if (list.size == 1) "1 episode" else "${list.size} episodes") +
+        (if (size > 0) "  •  " + omsSize(size) else "")
+}
+
+/** The Series tab inside the picker: tick a whole series, a season, or single episodes. */
+@Composable
+private fun OmsSeriesPicker(l: OmsLook) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val folders = DownloadCenter.phoneItems.groupBy { it.playlist ?: "" }
+    val selected = OmsCenter.selected
+    val chosen = remember(selected) { selected.map { it.uri.toString() }.toHashSet() }
+    var open by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    if (folders.isEmpty()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(28.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("No series yet", color = l.text, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Make one in the Series tab first, then you can send it from here.",
+                color = l.sub,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+        return
+    }
+
+    fun stateOf(list: List<HistoryItem>): Int {
+        val n = list.count { it.uri in chosen }
+        return when {
+            n == 0 -> 0
+            n == list.size -> 2
+            else -> 1
+        }
+    }
+
+    fun toggle(list: List<HistoryItem>) {
+        val allOn = stateOf(list) == 2
+        scope.launch {
+            if (allOn) {
+                OmsCenter.removeWhere(list.map { it.uri }.toHashSet())
+            } else {
+                val res = withContext(Dispatchers.IO) { OmsSeries.toItems(context, list) }
+                OmsCenter.addItems(res.items)
+                if (res.missing > 0) {
+                    Toast.makeText(context, "${res.missing} missing files were left out.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    LazyColumn(
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        folders.forEach { (folder, eps) ->
+            val ordered = DownloadCenter.playOrder(eps)
+            val seasons = ordered.mapNotNull { it.season }.distinct()
+            val folderKey = "f:$folder"
+            val folderOpen = folderKey in open
+            item(key = folderKey) {
+                OmsTreeRow(
+                    level = 0,
+                    title = folder,
+                    subtitle = omsGroupLine(ordered, seasons.size),
+                    state = stateOf(ordered),
+                    open = folderOpen,
+                    expandable = true,
+                    thumb = ordered.firstOrNull { !it.thumb.isNullOrBlank() }?.thumb,
+                    l = l,
+                    onCheck = { toggle(ordered) },
+                    onOpen = { open = if (folderOpen) open - folderKey else open + folderKey }
+                )
+            }
+            if (folderOpen) {
+                ordered.filter { it.season == null }.forEach { h ->
+                    item(key = "e:" + h.uri) {
+                        OmsTreeRow(
+                            level = 1,
+                            title = h.title,
+                            subtitle = if (h.size > 0) omsSize(h.size) else "",
+                            state = stateOf(listOf(h)),
+                            open = false,
+                            expandable = false,
+                            thumb = null,
+                            l = l,
+                            onCheck = { toggle(listOf(h)) },
+                            onOpen = {}
+                        )
+                    }
+                }
+                seasons.forEach { season ->
+                    val list = ordered.filter { it.season == season }
+                    val seasonKey = "s:$folder|$season"
+                    val seasonOpen = seasonKey in open
+                    item(key = seasonKey) {
+                        OmsTreeRow(
+                            level = 1,
+                            title = season,
+                            subtitle = omsGroupLine(list, 0),
+                            state = stateOf(list),
+                            open = seasonOpen,
+                            expandable = true,
+                            thumb = null,
+                            l = l,
+                            onCheck = { toggle(list) },
+                            onOpen = { open = if (seasonOpen) open - seasonKey else open + seasonKey }
+                        )
+                    }
+                    if (seasonOpen) {
+                        list.forEach { h ->
+                            item(key = "e:" + h.uri) {
+                                OmsTreeRow(
+                                    level = 2,
+                                    title = h.title,
+                                    subtitle = if (h.size > 0) omsSize(h.size) else "",
+                                    state = stateOf(listOf(h)),
+                                    open = false,
+                                    expandable = false,
+                                    thumb = null,
+                                    l = l,
+                                    onCheck = { toggle(listOf(h)) },
+                                    onOpen = {}
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One row of the series picker. [state]: 0 nothing ticked, 1 some, 2 all. */
+@Composable
+private fun OmsTreeRow(
+    level: Int,
+    title: String,
+    subtitle: String,
+    state: Int,
+    open: Boolean,
+    expandable: Boolean,
+    thumb: String?,
+    l: OmsLook,
+    onCheck: () -> Unit,
+    onOpen: () -> Unit
+) {
+    val shape = RoundedCornerShape(12.dp)
+    val on = state == 2
+    val angle by animateFloatAsState(if (open) 0f else -90f, tween(200), label = "oms-arrow")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = (level * 16).dp)
+            .clip(shape)
+            .background(if (on) l.accent.copy(alpha = 0.12f) else l.card)
+            .border(if (on) 2.dp else 1.dp, if (on) l.accent else l.border, shape)
+            .clickable { if (expandable) onOpen() else onCheck() }
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(
+                    when (state) {
+                        2 -> l.accent
+                        1 -> l.accent.copy(alpha = 0.4f)
+                        else -> Color.Transparent
+                    }
+                )
+                .border(1.5.dp, if (state > 0) l.accent else l.sub, CircleShape)
+                .clickable { onCheck() },
+            contentAlignment = Alignment.Center
+        ) {
+            if (state == 2) {
+                OmsIcon(R.drawable.ic_check, l.onAccent, 18.dp)
+            } else if (state == 1) {
+                Box(
+                    Modifier
+                        .width(10.dp)
+                        .height(2.dp)
+                        .background(l.onAccent)
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        if (level == 0) {
+            Thumb(thumb, Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)), R.drawable.ic_series, 22.dp)
+            Spacer(Modifier.width(10.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = l.text,
+                fontWeight = if (level < 2) FontWeight.Bold else FontWeight.Medium,
+                fontSize = if (level == 0) 15.sp else 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (subtitle.isNotEmpty()) Text(subtitle, color = l.sub, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (expandable) {
+            Icon(
+                painter = painterResource(R.drawable.ic_expand),
+                contentDescription = if (open) "Hide" else "Show",
+                tint = if (open) l.accent else l.sub,
+                modifier = Modifier
+                    .size(24.dp)
+                    .rotate(angle)
+            )
+        }
     }
 }

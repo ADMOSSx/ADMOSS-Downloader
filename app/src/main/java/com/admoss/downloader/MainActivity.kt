@@ -309,6 +309,14 @@ private fun AdmossApp(vm: DownloadViewModel) {
 
     var tab by rememberSaveable { mutableStateOf(0) }
 
+    // The Series tab's "Send" buttons ask for the Share tab (tab 4)
+    LaunchedEffect(OmsCenter.goShare) {
+        if (OmsCenter.goShare) {
+            tab = 4
+            OmsCenter.goShare = false
+        }
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -2709,7 +2717,8 @@ private fun SeasonCard(
     onPlay: () -> Unit,
     onAdd: () -> Unit,
     onRename: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onSend: (() -> Unit)? = null
 ) {
     val p = LocalPalette.current
     val angle by animateFloatAsState(if (open) 0f else -90f, tween(200), label = "season-arrow")
@@ -2766,6 +2775,15 @@ private fun SeasonCard(
                         onAdd()
                     }
                 )
+                if (onSend != null) {
+                    DropdownMenuItem(
+                        text = { Text("Send to another phone") },
+                        onClick = {
+                            menu = false
+                            onSend()
+                        }
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Rename season") },
                     onClick = {
@@ -3210,6 +3228,12 @@ private fun SeriesDetail(
             }
         }
 
+        item {
+            SmallAction("Send to another phone", R.drawable.ic_send, Modifier.fillMaxWidth()) {
+                OmsSeries.sendFromSeries(context, name, null)
+            }
+        }
+
         // Episodes without a season first, then one card for each season
         val plain = videos.filter { it.season == null }
         itemsIndexed(plain, key = { _, v -> v.uri }) { i, v ->
@@ -3243,6 +3267,7 @@ private fun SeriesDetail(
                         onToggle = { collapsed = if (isOpen) collapsed + s else collapsed - s },
                         onPlay = { playItems(context, eps, 0, name + " • " + s) },
                         onAdd = { onPick(s) },
+                        onSend = { OmsSeries.sendFromSeries(context, name, s) },
                         onRename = { seasonToRename = s },
                         onRemove = { seasonToRemove = s }
                     )

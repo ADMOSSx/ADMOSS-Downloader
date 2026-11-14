@@ -682,6 +682,23 @@ object DownloadCenter {
         removeItems(ctx, history.filter { it.external && it.playlist == name })
     }
 
+    /**
+     * Episodes received from another phone (the files are already saved by the app).
+     * They are added to the Series tab with their name, season and order, and get a cover.
+     */
+    fun addReceivedEpisodes(ctx: Context, items: List<HistoryItem>) {
+        if (items.isEmpty()) return
+        val app = ctx.applicationContext
+        thread(name = "admoss-received") {
+            val withCovers = items.map { it.copy(thumb = it.thumb ?: makeExternalThumb(app, Uri.parse(it.uri))) }
+            mainHandler.post {
+                withCovers.groupBy { it.playlist ?: "" }.forEach { (name, list) ->
+                    addExternalItems(app, name, playOrder(list))
+                }
+            }
+        }
+    }
+
     // ---- playlist editing ----
 
     @Synchronized

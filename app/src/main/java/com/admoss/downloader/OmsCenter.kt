@@ -103,6 +103,12 @@ object OmsCenter {
     var speed by mutableStateOf(0L)
     var summary by mutableStateOf<String?>(null)
 
+    /** Receiver: a line under the request, for example "3 already on this phone, they will be skipped". */
+    var requestNote by mutableStateOf<String?>(null)
+
+    /** Set by the Series tab ("Send"): the main screen switches to the Share tab and clears this. */
+    var goShare by mutableStateOf(false)
+
     private val main = Handler(Looper.getMainLooper())
     private val decisions = LinkedBlockingQueue<Boolean>()
     private var appCtx: Context? = null
@@ -152,6 +158,7 @@ object OmsCenter {
         doneBytes = 0L
         speed = 0L
         summary = null
+        requestNote = null
         myName = deviceName(app)
         return epoch
     }
@@ -214,6 +221,7 @@ object OmsCenter {
         qrText = null
         message = null
         request = null
+        requestNote = null
         summary = null
         selected = emptyList()
     }
@@ -263,7 +271,20 @@ object OmsCenter {
         }
     }
 
+    /** Adds items (for example a whole series) to the selection, without doubles. */
+    fun addItems(items: List<OmsMediaItem>) {
+        val have = selected.map { it.uri.toString() }.toHashSet()
+        selected = selected + items.filter { it.uri.toString() !in have }
+    }
+
+    fun removeWhere(uris: Set<String>) {
+        selected = selected.filter { it.uri.toString() !in uris }
+    }
+
     // ---------- receiving ----------
+
+    private fun episodeKey(series: String, season: String, title: String, size: Long): String =
+        series.trim().lowercase() + "|" + season.trim().lowercase() + "|" + title.trim().lowercase() + "|" + size
 
     fun startReceiving(ctx: Context) {
         val app = ctx.applicationContext
@@ -348,24 +369,51 @@ object OmsCenter {
             val size = input.readLong()
             val kind = input.readInt()
             val mime = input.readUTF()
+            val series = input.readUTF().take(80).trim()
+            val season = input.readUTF().take(60).trim()
+            val order = input.readInt()
             // photos, videos and music only
             if (size < 0 || kind < 0 || kind > 2 || OmsProtocol.kindOfMime(mime) != kind) {
                 output.writeByte(0)
                 output.flush()
                 return false
             }
-            files.add(OmsFile(null, name, size, kind, mime))
+            files.add(
+                OmsFile(
+                    null, name, size, kind, mime,
+                    if (series.isBlank()) "" else OmsProtocol.cleanName(series),
+                    if (season.isBlank() || series.isBlank()) "" else OmsProtocol.cleanName(season),
+                    order
+                )
+            )
             total += size
         }
 
+        // Episodes that are already in this phone's Series tab are not sent again
+        val have = DownloadCenter.phoneItems
+            .map { episodeKey(it.playlist.orEmpty(), it.season.orEmpty(), it.title, it.size) }
+            .toHashSet()
+        val skip = BooleanArray(files.size) { i ->
+            val f = files[i]
+            f.series.isNotEmpty() && episodeKey(f.series, f.season, f.name.substringBeforeLast('.'), f.size) in have
+        }
+        val skipped = skip.count { it }
+        val sendList = files.filterIndexed { i, _ -> !skip[i] }
+        val sendTotal = sendList.sumOf { it.size }
+
         // ask the person
         decisions.clear()
-        val totalBytesNow = total
+        val totalAll = total
         ui(e) {
             peerName = peer
             request = files
+            requestNote = if (skipped > 0) {
+                "$skipped already on this phone, they will be skipped."
+            } else {
+                null
+            }
             fileCount = files.size
-            totalBytes = totalBytesNow
+            totalBytes = totalAll
             phase = OmsPhase.REQUEST
         }
         val accepted = decisions.poll(60, TimeUnit.SECONDS) == true
@@ -375,17 +423,36 @@ object OmsCenter {
             output.flush()
             ui(e) {
                 request = null
+                requestNote = null
                 phase = OmsPhase.WAITING
             }
             return false
         }
         output.writeByte(1)
+        for (b in skip) output.writeBoolean(!b)
         output.flush()
+
+        if (sendList.isEmpty()) {
+            output.writeByte(1)
+            output.flush()
+            ui(e) {
+                request = null
+                requestNote = null
+                summary = "Everything was already on this phone."
+                phase = OmsPhase.DONE
+            }
+            Thread.sleep(1500)
+            main.post { if (e == epoch) appCtx?.let { endNetwork(it) } }
+            return true
+        }
 
         s.soTimeout = 60_000
         OmsNet.holdLocks(app)
         ui(e) {
             request = null
+            requestNote = null
+            fileCount = sendList.size
+            totalBytes = sendTotal
             doneBytes = 0L
             speed = 0L
             fileIndex = 0
@@ -395,20 +462,40 @@ object OmsCenter {
         var photos = 0
         var videos = 0
         var music = 0
-        for ((i, f) in files.withIndex()) {
+        val episodes = ArrayList<HistoryItem>()
+        for ((i, f) in sendList.withIndex()) {
             if (dead(e)) return true
             ui(e) {
                 fileIndex = i + 1
                 currentName = f.name
             }
-            saveOne(app, e, f, input, meter)
-            when (f.kind) {
-                OmsProtocol.KIND_PHOTO -> photos += 1
-                OmsProtocol.KIND_VIDEO -> videos += 1
-                else -> music += 1
+            val uri = saveOne(app, e, f, input, meter)
+            if (f.series.isNotEmpty()) {
+                episodes.add(
+                    HistoryItem(
+                        title = cutText(f.name.substringBeforeLast('.').ifBlank { f.name }, 90),
+                        uri = uri.toString(),
+                        audio = f.kind == OmsProtocol.KIND_MUSIC,
+                        playlist = f.series,
+                        index = f.order,
+                        size = f.size,
+                        external = true,
+                        season = f.season.ifBlank { null }
+                    )
+                )
+            } else {
+                when (f.kind) {
+                    OmsProtocol.KIND_PHOTO -> photos += 1
+                    OmsProtocol.KIND_VIDEO -> videos += 1
+                    else -> music += 1
+                }
             }
         }
         meter.flush()
+
+        // received episodes go straight into the Series tab
+        if (episodes.isNotEmpty()) DownloadCenter.addReceivedEpisodes(app, episodes)
+
         output.writeByte(1)
         output.flush()
 
@@ -416,9 +503,13 @@ object OmsCenter {
         if (photos > 0) parts.add(if (photos == 1) "1 photo in Pictures/ADMOSS Share" else "$photos photos in Pictures/ADMOSS Share")
         if (videos > 0) parts.add(if (videos == 1) "1 video in Movies/ADMOSS Share" else "$videos videos in Movies/ADMOSS Share")
         if (music > 0) parts.add(if (music == 1) "1 song in Music/ADMOSS Share" else "$music songs in Music/ADMOSS Share")
+        for ((name, list) in episodes.groupBy { it.playlist.orEmpty() }) {
+            parts.add((if (list.size == 1) "1 episode" else "${list.size} episodes") + " of \"" + name + "\" in your Series tab")
+        }
+        val note = if (skipped > 0) ".  $skipped already here, skipped" else ""
         ui(e) {
-            doneBytes = totalBytesNow
-            summary = "Saved " + parts.joinToString(", ")
+            doneBytes = sendTotal
+            summary = "Saved " + parts.joinToString(", ") + note
             phase = OmsPhase.DONE
         }
         // give the last bytes time to reach the sender before the private Wi-Fi closes
@@ -427,10 +518,10 @@ object OmsCenter {
         return true
     }
 
-    private fun saveOne(app: Context, e: Int, f: OmsFile, input: DataInputStream, meter: OmsMeter) {
+    private fun saveOne(app: Context, e: Int, f: OmsFile, input: DataInputStream, meter: OmsMeter): Uri {
         val resolver = app.contentResolver
         val collection: Uri
-        val folder: String
+        var folder: String
         when (f.kind) {
             OmsProtocol.KIND_PHOTO -> {
                 collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -444,6 +535,11 @@ object OmsCenter {
                 collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
                 folder = "Music/ADMOSS Share"
             }
+        }
+        if (f.series.isNotEmpty()) {
+            // Movies/ADMOSS Share/Series/<series>/<season>
+            folder += "/Series/" + OmsProtocol.cleanName(f.series).take(60)
+            if (f.season.isNotEmpty()) folder += "/" + OmsProtocol.cleanName(f.season).take(60)
         }
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
@@ -469,6 +565,7 @@ object OmsCenter {
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
+            return uri
         } catch (t: Throwable) {
             // never leave a half file behind
             try {
@@ -509,14 +606,28 @@ object OmsCenter {
         t is SocketTimeoutException -> "The other phone didn't answer in time."
         t is ConnectException -> "Couldn't reach the other phone. Make sure it is still on the Receive screen."
         t.message == "Cancelled" -> "Transfer cancelled."
-        t is IOException -> "The connection to the other phone was lost."
+        t is IOException -> "The connection to the other phone was lost. Make sure both phones have the latest ADMOSS version."
         else -> t.message ?: "The transfer failed."
+    }
+
+    private fun canRead(app: Context, uri: Uri): Boolean = try {
+        app.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+    } catch (t: Throwable) {
+        false
     }
 
     private fun sendAll(app: Context, e: Int, network: Network, host: String, link: OmsLink, files: List<OmsMediaItem>) {
         val s = Socket()
         socket = s
         try {
+            // a file that was deleted or moved since it was picked is left out
+            val readable = files.filter { canRead(app, it.uri) }
+            val missing = files.size - readable.size
+            if (readable.isEmpty()) {
+                fail(e, "None of the selected files can be read any more.")
+                return
+            }
+
             network.bindSocket(s)
             s.connect(InetSocketAddress(host, link.port), 15_000)
             try {
@@ -524,22 +635,26 @@ object OmsCenter {
             } catch (t: Throwable) {
                 // the default is fine
             }
-            val total = files.sumOf { it.size }
             ui(e) {
                 phase = OmsPhase.CONNECTING
                 message = "Waiting for ${link.name} to accept…"
+                fileCount = readable.size
+                totalBytes = readable.sumOf { it.size }
             }
             val out = DataOutputStream(BufferedOutputStream(s.getOutputStream(), 64 * 1024))
             val input = DataInputStream(BufferedInputStream(s.getInputStream(), 8 * 1024))
             out.writeUTF(OmsProtocol.MAGIC)
             out.writeUTF(link.token)
             out.writeUTF(myName.take(60))
-            out.writeInt(files.size)
-            for (f in files) {
+            out.writeInt(readable.size)
+            for (f in readable) {
                 out.writeUTF(f.name.take(200))
                 out.writeLong(f.size)
                 out.writeInt(f.kind)
                 out.writeUTF(f.mime)
+                out.writeUTF(f.series.take(80))
+                out.writeUTF(f.season.take(60))
+                out.writeInt(f.order)
             }
             out.flush()
 
@@ -560,42 +675,58 @@ object OmsCenter {
                 }
             }
 
+            // the other phone says which files it still needs (episodes it already has are skipped)
+            val wanted = BooleanArray(readable.size) { input.readBoolean() }
+            val toSend = readable.filterIndexed { i, _ -> wanted[i] }
+            val already = readable.size - toSend.size
+            val total = toSend.sumOf { it.size }
+
             s.soTimeout = 60_000
-            OmsNet.holdLocks(app)
-            ui(e) {
-                doneBytes = 0L
-                speed = 0L
-                fileIndex = 0
-                phase = OmsPhase.TRANSFERRING
-            }
-            val meter = OmsMeter { d, sp -> ui(e) { doneBytes = d; speed = sp } }
-            val buf = ByteArray(OmsProtocol.CHUNK)
-            for ((i, f) in files.withIndex()) {
-                if (dead(e)) return
+            if (toSend.isNotEmpty()) {
+                OmsNet.holdLocks(app)
                 ui(e) {
-                    fileIndex = i + 1
-                    currentName = f.name
+                    fileCount = toSend.size
+                    totalBytes = total
+                    doneBytes = 0L
+                    speed = 0L
+                    fileIndex = 0
+                    phase = OmsPhase.TRANSFERRING
                 }
-                val stream = app.contentResolver.openInputStream(f.uri) ?: throw IOException("Can't read ${f.name}")
-                stream.use { src ->
-                    var left = f.size
-                    while (left > 0) {
-                        if (dead(e)) throw IOException("Cancelled")
-                        val n = src.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
-                        if (n < 0) throw IOException("${f.name} changed while sending")
-                        out.write(buf, 0, n)
-                        left -= n
-                        meter.add(n)
+                val meter = OmsMeter { d, sp -> ui(e) { doneBytes = d; speed = sp } }
+                val buf = ByteArray(OmsProtocol.CHUNK)
+                for ((i, f) in toSend.withIndex()) {
+                    if (dead(e)) return
+                    ui(e) {
+                        fileIndex = i + 1
+                        currentName = f.name
+                    }
+                    val stream = app.contentResolver.openInputStream(f.uri) ?: throw IOException("Can't read ${f.name}")
+                    stream.use { src ->
+                        var left = f.size
+                        while (left > 0) {
+                            if (dead(e)) throw IOException("Cancelled")
+                            val n = src.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                            if (n < 0) throw IOException("${f.name} changed while sending")
+                            out.write(buf, 0, n)
+                            left -= n
+                            meter.add(n)
+                        }
                     }
                 }
+                out.flush()
+                meter.flush()
             }
-            out.flush()
-            meter.flush()
             input.readByte() // the other phone says everything was saved
 
+            val text = if (toSend.isEmpty()) {
+                "Everything was already on ${link.name}."
+            } else {
+                "Sent ${toSend.size} file" + (if (toSend.size == 1) "" else "s") + "  •  " + omsSize(total) +
+                    (if (already > 0) ".  $already already there" else "")
+            } + (if (missing > 0) ".  $missing missing on this phone" else "")
             ui(e) {
                 doneBytes = total
-                summary = "Sent ${files.size} file" + (if (files.size == 1) "" else "s") + "  •  " + omsSize(total)
+                summary = text
                 phase = OmsPhase.DONE
             }
             main.post { if (e == epoch) endNetwork(app) }
