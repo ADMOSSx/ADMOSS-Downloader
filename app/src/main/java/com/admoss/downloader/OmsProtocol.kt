@@ -13,7 +13,9 @@ class OmsFile(
     /** Set when the file is an episode from the Series tab. */
     val series: String = "",
     val season: String = "",
-    val order: Int = 0
+    val order: Int = 0,
+    /** A movie of the Series tab (it has no series name). */
+    val movie: Boolean = false
 )
 
 /** A file the user can pick on the sending phone (picker, review screen and transfer header). */
@@ -27,21 +29,23 @@ class OmsMediaItem(
     /** Set when the file is an episode from the Series tab. */
     val series: String = "",
     val season: String = "",
-    val order: Int = 0
+    val order: Int = 0,
+    /** A movie of the Series tab (it has no series name). */
+    val movie: Boolean = false
 )
 
 /**
  * The tiny protocol between two phones (over one TCP connection):
  *
  *  sender   -> MAGIC, code, sender name, number of files, then per file:
- *              name, size, kind, mime, series, season, order
+ *              name, size, kind, mime, series, season, order, movie
  *  receiver -> 1 (accepted), 0 (declined) or 2 (wrong code)
  *  receiver -> one yes/no per file: "send it" (no = already on this phone, skip it)
  *  sender   -> the raw bytes of every file that was asked for, one after the other
  *  receiver -> 1 (everything saved)
  */
 object OmsProtocol {
-    const val MAGIC = "ADMOSS-OMS-2"
+    const val MAGIC = "ADMOSS-OMS-3"
     const val KIND_PHOTO = 0
     const val KIND_VIDEO = 1
     const val KIND_MUSIC = 2

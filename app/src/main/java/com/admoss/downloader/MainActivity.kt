@@ -331,7 +331,7 @@ private fun AdmossApp(vm: DownloadViewModel) {
             when (tab) {
                 0 -> DownloadTab(vm)
                 1 -> LibraryTab()
-                2 -> SeriesTab()
+                2 -> SeriesScreen()
                 4 -> OmsTab()
                 else -> SettingsTab()
             }

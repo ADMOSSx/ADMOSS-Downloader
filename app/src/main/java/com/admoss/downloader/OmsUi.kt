@@ -1,7 +1,11 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.admoss.downloader
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -61,9 +65,12 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 // ---------- look (follows the app's current theme) ----------
 
@@ -179,6 +186,7 @@ fun OmsTab() {
         step == 1 -> OmsPick(l)
         step == 2 -> OmsReview(l)
         step == 3 -> OmsScan(l)
+        step == 5 -> OmsReceivedScreen(l)
         else -> OmsReceive(l)
     }
 }
@@ -187,6 +195,8 @@ fun OmsTab() {
 
 @Composable
 private fun OmsHome(l: OmsLook) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { OmsReceived.ensure(context) }
     Column(
         Modifier
             .fillMaxSize()
@@ -293,6 +303,46 @@ private fun OmsHome(l: OmsLook) {
             OmsChip("Photos", R.drawable.ic_photo, l)
             OmsChip("Videos", R.drawable.ic_video, l)
             OmsChip("Music", R.drawable.ic_music, l)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        val receivedCount = OmsReceived.items.size
+        val receivedSize = OmsReceived.items.sumOf { it.size }
+        val receivedShape = RoundedCornerShape(16.dp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(receivedShape)
+                .background(l.card)
+                .border(1.dp, l.border, receivedShape)
+                .clickable { OmsCenter.step = 5 }
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(l.accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) { OmsIcon(R.drawable.ic_download, l.accent, 24.dp) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Received files", color = l.text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text(
+                    if (receivedCount == 0) "Everything you receive shows up here" else "$receivedCount files  •  ${omsSize(receivedSize)}",
+                    color = l.sub,
+                    fontSize = 12.sp
+                )
+            }
+            Icon(
+                painter = painterResource(R.drawable.ic_expand),
+                contentDescription = null,
+                tint = l.sub,
+                modifier = Modifier
+                    .size(24.dp)
+                    .rotate(-90f)
+            )
         }
 
         Spacer(Modifier.height(18.dp))
@@ -413,9 +463,9 @@ private fun OmsPick(l: OmsLook) {
                 tabs.forEach { t ->
                     val on = kind == t.third
                     val count = if (t.third == 3) {
-                        selected.count { it.series.isNotEmpty() }
+                        selected.count { it.series.isNotEmpty() || it.movie }
                     } else {
-                        selected.count { it.kind == t.third && it.series.isEmpty() }
+                        selected.count { it.kind == t.third && it.series.isEmpty() && !it.movie }
                     }
                     Row(
                         Modifier
@@ -1143,20 +1193,30 @@ private fun OmsStat(value: String, label: String, l: OmsLook) {
 
 // ---------- series ----------
 
-private fun omsSelectionSeries(items: List<OmsMediaItem>): List<String> =
-    items.filter { it.series.isNotEmpty() }.groupBy { it.series }.map { (name, list) ->
+private fun omsSelectionSeries(items: List<OmsMediaItem>): List<String> {
+    val lines = items.filter { it.series.isNotEmpty() }.groupBy { it.series }.map { (name, list) ->
         val seasons = list.map { it.season }.filter { it.isNotEmpty() }.distinct()
         name + (if (seasons.isNotEmpty()) "  •  " + seasons.joinToString(", ") else "") +
             "  •  " + (if (list.size == 1) "1 episode" else "${list.size} episodes") +
             "  •  " + omsSize(list.sumOf { it.size })
     }
+    val movies = items.filter { it.movie }
+    return if (movies.isEmpty()) {
+        lines
+    } else {
+        lines + ("Movies  •  " + (if (movies.size == 1) "1 movie" else "${movies.size} movies") + "  •  " + omsSize(movies.sumOf { it.size }))
+    }
+}
 
-private fun omsRequestSeries(files: List<OmsFile>): List<String> =
-    files.filter { it.series.isNotEmpty() }.groupBy { it.series }.map { (name, list) ->
+private fun omsRequestSeries(files: List<OmsFile>): List<String> {
+    val lines = files.filter { it.series.isNotEmpty() }.groupBy { it.series }.map { (name, list) ->
         val seasons = list.map { it.season }.filter { it.isNotEmpty() }.distinct()
         name + (if (seasons.isNotEmpty()) "  •  " + seasons.joinToString(", ") else "") +
             "  •  " + (if (list.size == 1) "1 episode" else "${list.size} episodes")
     }
+    val movies = files.count { it.movie }
+    return if (movies == 0) lines else lines + (if (movies == 1) "1 movie" else "$movies movies")
+}
 
 private fun omsGroupLine(list: List<HistoryItem>, seasons: Int): String {
     val size = list.sumOf { it.size }
@@ -1170,12 +1230,13 @@ private fun omsGroupLine(list: List<HistoryItem>, seasons: Int): String {
 private fun OmsSeriesPicker(l: OmsLook) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val folders = DownloadCenter.phoneItems.groupBy { it.playlist ?: "" }
+    val folders = DownloadCenter.seriesItems.groupBy { it.playlist ?: "" }
+    val movies = DownloadCenter.movieItems
     val selected = OmsCenter.selected
     val chosen = remember(selected) { selected.map { it.uri.toString() }.toHashSet() }
     var open by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    if (folders.isEmpty()) {
+    if (folders.isEmpty() && movies.isEmpty()) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -1183,10 +1244,10 @@ private fun OmsSeriesPicker(l: OmsLook) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("No series yet", color = l.text, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("No series or movies yet", color = l.text, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Make one in the Series tab first, then you can send it from here.",
+                "Add some in the Series tab first, then you can send them from here.",
                 color = l.sub,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center
@@ -1223,6 +1284,42 @@ private fun OmsSeriesPicker(l: OmsLook) {
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (movies.isNotEmpty()) {
+            val moviesOpen = "movies" in open
+            item(key = "movies") {
+                OmsTreeRow(
+                    level = 0,
+                    title = "Movies",
+                    subtitle = (if (movies.size == 1) "1 movie" else "${movies.size} movies") +
+                        (if (movies.sumOf { it.size } > 0) "  •  " + omsSize(movies.sumOf { it.size }) else ""),
+                    state = stateOf(movies),
+                    open = moviesOpen,
+                    expandable = true,
+                    thumb = movies.firstOrNull { !it.thumb.isNullOrBlank() }?.thumb,
+                    l = l,
+                    onCheck = { toggle(movies) },
+                    onOpen = { open = if (moviesOpen) open - "movies" else open + "movies" }
+                )
+            }
+            if (moviesOpen) {
+                movies.forEach { h ->
+                    item(key = "e:" + h.uri) {
+                        OmsTreeRow(
+                            level = 1,
+                            title = h.title,
+                            subtitle = if (h.size > 0) omsSize(h.size) else "",
+                            state = stateOf(listOf(h)),
+                            open = false,
+                            expandable = false,
+                            thumb = null,
+                            l = l,
+                            onCheck = { toggle(listOf(h)) },
+                            onOpen = {}
+                        )
+                    }
+                }
+            }
+        }
         folders.forEach { (folder, eps) ->
             val ordered = DownloadCenter.playOrder(eps)
             val seasons = ordered.mapNotNull { it.season }.distinct()
@@ -1380,6 +1477,287 @@ private fun OmsTreeRow(
                     .size(24.dp)
                     .rotate(angle)
             )
+        }
+    }
+}
+
+
+// ---------- received files ----------
+
+private fun omsOpenReceived(context: Context, item: OmsReceivedItem, group: List<OmsReceivedItem>) {
+    try {
+        if (item.kind == OmsProtocol.KIND_PHOTO) {
+            val photos = group.filter { it.kind == OmsProtocol.KIND_PHOTO }
+            val start = photos.indexOfFirst { it.uri == item.uri }.coerceAtLeast(0)
+            val ordered = photos.drop(start) + photos.take(start)
+            context.startActivity(
+                Intent(context, PhotoViewerActivity::class.java)
+                    .putStringArrayListExtra(PhotoViewerActivity.EXTRA_URIS, ArrayList(ordered.map { it.uri }))
+                    .putExtra(PhotoViewerActivity.EXTRA_MUSIC, "")
+                    .putExtra(PhotoViewerActivity.EXTRA_TITLE, "From " + item.from)
+            )
+        } else {
+            val list = group.filter { it.kind == item.kind }
+            val start = list.indexOfFirst { it.uri == item.uri }.coerceAtLeast(0)
+            context.startActivity(
+                Intent(context, PlayerActivity::class.java)
+                    .putStringArrayListExtra(PlayerActivity.EXTRA_URIS, ArrayList(list.map { it.uri }))
+                    .putStringArrayListExtra(PlayerActivity.EXTRA_TITLES, ArrayList(list.map { it.name.substringBeforeLast('.') }))
+                    .putStringArrayListExtra(PlayerActivity.EXTRA_THUMBS, ArrayList(list.map { "" }))
+                    .putExtra(PlayerActivity.EXTRA_AUDIO, list.map { it.kind == OmsProtocol.KIND_MUSIC }.toBooleanArray())
+                    .putExtra(PlayerActivity.EXTRA_SIZES, list.map { it.size }.toLongArray())
+                    .putExtra(PlayerActivity.EXTRA_NAME, "From " + item.from)
+                    .putExtra(PlayerActivity.EXTRA_START, start)
+            )
+        }
+    } catch (e: Throwable) {
+        Toast.makeText(context, "Can't open this file", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun OmsFilterChip(label: String, selected: Boolean, l: OmsLook, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .clip(shape)
+            .background(if (selected) l.accent else Color.Transparent)
+            .border(1.dp, if (selected) l.accent else l.border, shape)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    ) {
+        Text(label, color = if (selected) l.onAccent else l.text, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+    }
+}
+
+/** Everything that arrived from other phones, grouped by transfer, newest first. */
+@Composable
+private fun OmsReceivedScreen(l: OmsLook) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { OmsReceived.ensure(context) }
+    var filter by remember { mutableStateOf(-1) }
+    var query by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirm by remember { mutableStateOf(false) }
+    val selecting = picked.isNotEmpty()
+    BackHandler(enabled = selecting) { picked = emptySet() }
+
+    val all = OmsReceived.items
+    val q = query.trim()
+    val shown = all.filter {
+        (filter < 0 || it.kind == filter) &&
+            (q.isEmpty() || it.name.contains(q, true) || it.from.contains(q, true) || it.series.contains(q, true))
+    }
+    val batches = shown.groupBy { it.batch }.toList().sortedByDescending { it.first }
+    val dateFormat = remember { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT) }
+
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text(if (picked.size == 1) "Delete this file?" else "Delete ${picked.size} files?") },
+            text = {
+                Column {
+                    Text("They will be deleted from your phone. You can't undo this.", fontSize = 14.sp)
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = {
+                        OmsReceived.remove(context, picked)
+                        picked = emptySet()
+                        confirm = false
+                    }) { Text("Only remove from the list", color = l.accent) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val targets = picked
+                    picked = emptySet()
+                    confirm = false
+                    thread(name = "oms-delete") {
+                        val done = HashSet<String>()
+                        var failed = 0
+                        for (u in targets) {
+                            try {
+                                if (context.contentResolver.delete(Uri.parse(u), null, null) > 0) done.add(u) else failed += 1
+                            } catch (t: Throwable) {
+                                failed += 1
+                            }
+                        }
+                        Handler(Looper.getMainLooper()).post {
+                            OmsReceived.remove(context, done)
+                            // episodes and movies that came from this phone leave the Series tab as well
+                            val gone = DownloadCenter.history.filter { it.external && it.uri in done }
+                            if (gone.isNotEmpty()) DownloadCenter.removeItems(context, gone)
+                            Toast.makeText(
+                                context,
+                                if (failed == 0) "Deleted ${done.size} from your phone." else "Deleted ${done.size}. $failed could not be deleted: use your gallery.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }) { Text("Delete", color = OmsRed, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
+        )
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Column(Modifier.padding(start = 12.dp, end = 20.dp, top = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { if (selecting) picked = emptySet() else OmsCenter.step = 0 }) {
+                    OmsIcon(if (selecting) R.drawable.ic_close else R.drawable.ic_back, l.text)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (selecting) "${picked.size} selected" else "Received files",
+                        color = l.text,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                    if (!selecting) {
+                        Text(
+                            if (all.isEmpty()) "Nothing received yet" else "${all.size} files  •  ${omsSize(all.sumOf { it.size })}",
+                            color = l.sub,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                if (selecting) {
+                    TextButton(onClick = { picked = shown.map { it.uri }.toSet() }) { Text("All", color = l.accent) }
+                    IconButton(onClick = { confirm = true }) { OmsIcon(R.drawable.ic_delete, OmsRed) }
+                } else if (all.isNotEmpty()) {
+                    IconButton(onClick = {
+                        searching = !searching
+                        if (!searching) query = ""
+                    }) { OmsIcon(if (searching) R.drawable.ic_close else R.drawable.ic_search, l.text, 22.dp) }
+                }
+            }
+            if (searching) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("Search by name or sender") },
+                    shape = RoundedCornerShape(14.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            if (all.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OmsFilterChip("All", filter < 0, l) { filter = -1 }
+                    OmsFilterChip("Photos", filter == OmsProtocol.KIND_PHOTO, l) { filter = OmsProtocol.KIND_PHOTO }
+                    OmsFilterChip("Videos", filter == OmsProtocol.KIND_VIDEO, l) { filter = OmsProtocol.KIND_VIDEO }
+                    OmsFilterChip("Music", filter == OmsProtocol.KIND_MUSIC, l) { filter = OmsProtocol.KIND_MUSIC }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        if (all.isEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(28.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    Modifier
+                        .size(84.dp)
+                        .clip(CircleShape)
+                        .background(l.accent.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) { OmsIcon(R.drawable.ic_download, l.accent, 42.dp) }
+                Spacer(Modifier.height(16.dp))
+                Text("No received files yet", color = l.text, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Photos, videos, music, series and movies that other phones send you will be listed here.",
+                    color = l.sub,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else if (shown.isEmpty()) {
+            Text("Nothing matches.", color = l.sub, fontSize = 14.sp, modifier = Modifier.padding(24.dp))
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                batches.forEach { (batch, list) ->
+                    val ordered = list.sortedBy { it.time }
+                    item(key = "b:$batch") {
+                        Column(Modifier.padding(top = 8.dp)) {
+                            Text(
+                                "From " + ordered.first().from.ifBlank { "another phone" },
+                                color = l.text,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                (if (batch > 0) dateFormat.format(Date(batch)) + "  •  " else "") +
+                                    (if (ordered.size == 1) "1 file" else "${ordered.size} files") +
+                                    "  •  " + omsSize(ordered.sumOf { it.size }),
+                                color = l.sub,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                    items(ordered, key = { it.uri }) { item ->
+                        val on = item.uri in picked
+                        val shape = RoundedCornerShape(12.dp)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(shape)
+                                .background(if (on) l.accent.copy(alpha = 0.14f) else l.card)
+                                .border(if (on) 2.dp else 1.dp, if (on) l.accent else l.border, shape)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (selecting) {
+                                            picked = if (on) picked - item.uri else picked + item.uri
+                                        } else {
+                                            omsOpenReceived(context, item, ordered)
+                                        }
+                                    },
+                                    onLongClick = { picked = picked + item.uri }
+                                )
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OmsThumb(
+                                OmsMediaItem(Uri.parse(item.uri), item.name, item.size, item.kind, "", 0L),
+                                Modifier
+                                    .size(54.dp)
+                                    .clip(RoundedCornerShape(10.dp)),
+                                l
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(item.name, color = l.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    omsKindName(item.kind, false).replaceFirstChar { it.uppercase() } + "  •  " + omsSize(item.size),
+                                    color = l.sub,
+                                    fontSize = 11.sp
+                                )
+                                if (item.movie || item.series.isNotEmpty()) {
+                                    Text(
+                                        if (item.movie) "In your Series tab  •  Movie" else "In your Series tab  •  " + item.series +
+                                            (if (item.season.isNotEmpty()) "  " + item.season else ""),
+                                        color = l.accent,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (selecting) OmsCheck(on, l)
+                        }
+                    }
+                }
+            }
         }
     }
 }

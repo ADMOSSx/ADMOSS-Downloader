@@ -9,11 +9,11 @@ import android.webkit.MimeTypeMap
 import android.widget.Toast
 import kotlin.concurrent.thread
 
-/** Episodes turned into things that can be sent, and how many of them could not be read. */
+/** Episodes and movies turned into things that can be sent, and how many of them could not be read. */
 class OmsConverted(val items: List<OmsMediaItem>, val missing: Int)
 
 /**
- * Sending from the Series tab: whole series, one season, or single episodes.
+ * Sending from the Series tab: a whole series, one season, single episodes or movies.
  * The other phone gets them in its own Series tab, with the same name, seasons and order.
  */
 object OmsSeries {
@@ -29,8 +29,8 @@ object OmsSeries {
         val out = ArrayList<OmsMediaItem>()
         var missing = 0
         for (h in list) {
-            val series = h.playlist.orEmpty()
-            if (!h.external || series.isBlank() || h.photoUris.isNotEmpty()) continue
+            val series = if (h.movie) "" else h.playlist.orEmpty()
+            if (!h.external || (!h.movie && series.isBlank()) || h.photoUris.isNotEmpty()) continue
             val uri = Uri.parse(h.uri)
             if (!canRead(ctx, uri)) {
                 missing += 1
@@ -64,11 +64,12 @@ object OmsSeries {
                 missing += 1
                 continue
             }
-            val kind = if (h.audio) OmsProtocol.KIND_MUSIC else OmsProtocol.KIND_VIDEO
+            // a movie is always sent as a video
+            val kind = if (h.audio && !h.movie) OmsProtocol.KIND_MUSIC else OmsProtocol.KIND_VIDEO
             val type = ctx.contentResolver.getType(uri) ?: ""
             val mime = if (OmsProtocol.kindOfMime(type) == kind) type else OmsProtocol.fallbackMime(kind)
             if (name.isBlank()) {
-                val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: if (h.audio) "mp3" else "mp4"
+                val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: if (kind == OmsProtocol.KIND_MUSIC) "mp3" else "mp4"
                 name = h.title + "." + ext
             }
             out.add(
@@ -80,16 +81,30 @@ object OmsSeries {
                     mime = mime,
                     durationMs = 0L,
                     series = series,
-                    season = h.season.orEmpty(),
-                    order = h.index
+                    season = if (h.movie) "" else h.season.orEmpty(),
+                    order = h.index,
+                    movie = h.movie
                 )
             )
         }
         return OmsConverted(out, missing)
     }
 
-    /** The "Send" buttons of the Series tab: picks the episodes, opens the review screen in the Share tab. */
+    /** The "Send" buttons of the Series tab for a series or one season. */
     fun sendFromSeries(ctx: Context, folder: String, season: String?) {
+        send(ctx) {
+            DownloadCenter.playOrder(
+                DownloadCenter.seriesItems.filter { it.playlist == folder && (season == null || it.season == season) }
+            )
+        }
+    }
+
+    /** The "Send" buttons for movies and single episodes. */
+    fun sendItems(ctx: Context, items: List<HistoryItem>) {
+        send(ctx) { items }
+    }
+
+    private fun send(ctx: Context, pick: () -> List<HistoryItem>) {
         val app = ctx.applicationContext
         val busy = OmsCenter.phase
         if (busy == OmsPhase.TRANSFERRING || busy == OmsPhase.JOINING ||
@@ -99,10 +114,7 @@ object OmsSeries {
             return
         }
         thread(name = "oms-series") {
-            val list = DownloadCenter.phoneItems.filter {
-                it.playlist == folder && (season == null || it.season == season)
-            }
-            val converted = toItems(app, DownloadCenter.playOrder(list))
+            val converted = toItems(app, pick())
             Handler(Looper.getMainLooper()).post {
                 if (converted.items.isEmpty()) {
                     Toast.makeText(app, "Nothing to send: the files are missing from this phone.", Toast.LENGTH_LONG).show()

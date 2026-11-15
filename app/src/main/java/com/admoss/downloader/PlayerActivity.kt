@@ -309,9 +309,12 @@ private fun PlayerScreen(
         if (d <= 0) return
         val key = uris[index].toString()
         if (p > 5000 && p < d - 8000) {
-            prefs.edit().putInt(key, p).apply()
-        } else if (p >= d - 8000) {
-            prefs.edit().remove(key).apply()
+            // position, length and time of the last watch: the Series tab builds "Continue watching" from these
+            prefs.edit().putInt(key, p).putInt("$key#d", d).putLong("$key#t", System.currentTimeMillis())
+                .remove("$key#w").apply()
+        } else if (p >= d - 8000 && p > d / 2) {
+            prefs.edit().remove(key).putInt("$key#d", d).putBoolean("$key#w", true)
+                .putLong("$key#t", System.currentTimeMillis()).apply()
         }
     }
 
@@ -332,7 +335,9 @@ private fun PlayerScreen(
             video.post { updateScale() }
         }
         video.setOnCompletionListener {
-            prefs.edit().remove(uris[index].toString()).apply()
+            val doneKey = uris[index].toString()
+            prefs.edit().remove(doneKey).putBoolean("$doneKey#w", true)
+                .putLong("$doneKey#t", System.currentTimeMillis()).apply()
             when {
                 repeatMode == 2 -> {
                     video.seekTo(0)

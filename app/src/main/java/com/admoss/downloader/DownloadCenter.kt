@@ -40,7 +40,9 @@ data class HistoryItem(
     /** Added from the phone by the user: the file is not ours, so it is never deleted or moved. */
     val external: Boolean = false,
     /** Season inside a folder (only for phone videos), for example "S1". */
-    val season: String? = null
+    val season: String? = null,
+    /** A movie of the Series tab (no series name, no season). */
+    val movie: Boolean = false
 )
 
 enum class Status { WAITING, DOWNLOADING, DONE, FAILED, CANCELLED }
@@ -692,11 +694,70 @@ object DownloadCenter {
         thread(name = "admoss-received") {
             val withCovers = items.map { it.copy(thumb = it.thumb ?: makeExternalThumb(app, Uri.parse(it.uri))) }
             mainHandler.post {
-                withCovers.groupBy { it.playlist ?: "" }.forEach { (name, list) ->
+                val received = withCovers.partition { it.movie }
+                if (received.first.isNotEmpty()) {
+                    history = received.first + history
+                    saveHistory(app)
+                }
+                received.second.groupBy { it.playlist ?: "" }.forEach { (name, list) ->
                     addExternalItems(app, name, playOrder(list))
                 }
             }
         }
+    }
+
+    /** The series of the Series tab (episodes of a folder). */
+    val seriesItems: List<HistoryItem>
+        get() = history.filter { it.external && !it.movie && it.playlist != null }
+
+    /** The movies of the Series tab. */
+    val movieItems: List<HistoryItem>
+        get() = history.filter { it.external && it.movie }
+
+    /** Adds movies that are already on the phone. Nothing is copied or moved. */
+    fun addMoviesAsync(ctx: Context, uris: List<Uri>, onDone: (Int) -> Unit) {
+        val app = ctx.applicationContext
+        thread(name = "admoss-add-movies") {
+            val made = ArrayList<HistoryItem>()
+            try {
+                val known = history.map { it.uri }.toSet()
+                val picked = uris.filter { it.toString() !in known }
+                    .map { describe(app, it) }
+                    .sortedWith { a, b -> naturalCompare(a.name, b.name) }
+                for (p in picked) {
+                    made.add(
+                        HistoryItem(
+                            title = cutText(p.name.substringBeforeLast('.').ifBlank { p.name }, 90),
+                            uri = p.uri.toString(),
+                            audio = false,
+                            playlist = null,
+                            index = 0,
+                            thumb = makeExternalThumb(app, p.uri),
+                            size = p.size,
+                            external = true,
+                            movie = true
+                        )
+                    )
+                }
+            } catch (e: Throwable) {
+                // add what was read so far
+            }
+            mainHandler.post {
+                if (made.isNotEmpty()) {
+                    history = made + history
+                    saveHistory(app)
+                }
+                onDone(made.size)
+            }
+        }
+    }
+
+    @Synchronized
+    fun renameItem(ctx: Context, uri: String, title: String) {
+        val t = title.trim()
+        if (t.isBlank()) return
+        history = history.map { if (it.uri == uri) it.copy(title = t) else it }
+        saveHistory(ctx)
     }
 
     // ---- playlist editing ----
@@ -1040,7 +1101,8 @@ object DownloadCenter {
                 (o.optJSONArray("pu")?.let { a -> (0 until a.length()).map { i -> a.getString(i) } } ?: emptyList()),
                 o.optString("mu", "").ifBlank { null },
                 o.optBoolean("ex", false),
-                o.optString("se", "").ifBlank { null }
+                o.optString("se", "").ifBlank { null },
+                o.optBoolean("mv", false)
             )
         }
     } catch (e: Throwable) {
@@ -1054,7 +1116,7 @@ object DownloadCenter {
             arr.put(
                 JSONObject().put("t", it.title).put("u", it.uri).put("a", it.audio)
                     .put("p", it.playlist ?: "").put("i", it.index).put("th", it.thumb ?: "").put("sz", it.size)
-                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "").put("ex", it.external).put("se", it.season ?: "")
+                    .put("pu", JSONArray(it.photoUris)).put("mu", it.musicUri ?: "").put("ex", it.external).put("se", it.season ?: "").put("mv", it.movie)
             )
         }
         ctx.getSharedPreferences("admoss", Context.MODE_PRIVATE)

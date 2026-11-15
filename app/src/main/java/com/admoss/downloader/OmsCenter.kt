@@ -372,8 +372,11 @@ object OmsCenter {
             val series = input.readUTF().take(80).trim()
             val season = input.readUTF().take(60).trim()
             val order = input.readInt()
+            val movie = input.readBoolean()
             // photos, videos and music only
-            if (size < 0 || kind < 0 || kind > 2 || OmsProtocol.kindOfMime(mime) != kind) {
+            if (size < 0 || kind < 0 || kind > 2 || OmsProtocol.kindOfMime(mime) != kind ||
+                (movie && kind != OmsProtocol.KIND_VIDEO)
+            ) {
                 output.writeByte(0)
                 output.flush()
                 return false
@@ -383,7 +386,8 @@ object OmsCenter {
                     null, name, size, kind, mime,
                     if (series.isBlank()) "" else OmsProtocol.cleanName(series),
                     if (season.isBlank() || series.isBlank()) "" else OmsProtocol.cleanName(season),
-                    order
+                    order,
+                    movie && series.isBlank()
                 )
             )
             total += size
@@ -395,7 +399,8 @@ object OmsCenter {
             .toHashSet()
         val skip = BooleanArray(files.size) { i ->
             val f = files[i]
-            f.series.isNotEmpty() && episodeKey(f.series, f.season, f.name.substringBeforeLast('.'), f.size) in have
+            (f.series.isNotEmpty() || f.movie) &&
+                episodeKey(f.series, f.season, f.name.substringBeforeLast('.'), f.size) in have
         }
         val skipped = skip.count { it }
         val sendList = files.filterIndexed { i, _ -> !skip[i] }
@@ -463,6 +468,7 @@ object OmsCenter {
         var videos = 0
         var music = 0
         val episodes = ArrayList<HistoryItem>()
+        val batch = System.currentTimeMillis()
         for ((i, f) in sendList.withIndex()) {
             if (dead(e)) return true
             ui(e) {
@@ -470,7 +476,30 @@ object OmsCenter {
                 currentName = f.name
             }
             val uri = saveOne(app, e, f, input, meter)
-            if (f.series.isNotEmpty()) {
+            // every received file goes on the "Received files" list, even if the transfer stops later
+            OmsReceived.add(
+                app,
+                listOf(
+                    OmsReceivedItem(
+                        uri.toString(), f.name, f.kind, f.size, peer, batch, System.currentTimeMillis(),
+                        f.series, f.season, f.movie
+                    )
+                )
+            )
+            if (f.movie) {
+                episodes.add(
+                    HistoryItem(
+                        title = cutText(f.name.substringBeforeLast('.').ifBlank { f.name }, 90),
+                        uri = uri.toString(),
+                        audio = false,
+                        playlist = null,
+                        index = 0,
+                        size = f.size,
+                        external = true,
+                        movie = true
+                    )
+                )
+            } else if (f.series.isNotEmpty()) {
                 episodes.add(
                     HistoryItem(
                         title = cutText(f.name.substringBeforeLast('.').ifBlank { f.name }, 90),
@@ -503,7 +532,9 @@ object OmsCenter {
         if (photos > 0) parts.add(if (photos == 1) "1 photo in Pictures/ADMOSS Share" else "$photos photos in Pictures/ADMOSS Share")
         if (videos > 0) parts.add(if (videos == 1) "1 video in Movies/ADMOSS Share" else "$videos videos in Movies/ADMOSS Share")
         if (music > 0) parts.add(if (music == 1) "1 song in Music/ADMOSS Share" else "$music songs in Music/ADMOSS Share")
-        for ((name, list) in episodes.groupBy { it.playlist.orEmpty() }) {
+        val movieCount = episodes.count { it.movie }
+        if (movieCount > 0) parts.add((if (movieCount == 1) "1 movie" else "$movieCount movies") + " in your Series tab")
+        for ((name, list) in episodes.filter { !it.movie }.groupBy { it.playlist.orEmpty() }) {
             parts.add((if (list.size == 1) "1 episode" else "${list.size} episodes") + " of \"" + name + "\" in your Series tab")
         }
         val note = if (skipped > 0) ".  $skipped already here, skipped" else ""
@@ -536,7 +567,9 @@ object OmsCenter {
                 folder = "Music/ADMOSS Share"
             }
         }
-        if (f.series.isNotEmpty()) {
+        if (f.movie) {
+            folder += "/Movies"
+        } else if (f.series.isNotEmpty()) {
             // Movies/ADMOSS Share/Series/<series>/<season>
             folder += "/Series/" + OmsProtocol.cleanName(f.series).take(60)
             if (f.season.isNotEmpty()) folder += "/" + OmsProtocol.cleanName(f.season).take(60)
@@ -655,6 +688,7 @@ object OmsCenter {
                 out.writeUTF(f.series.take(80))
                 out.writeUTF(f.season.take(60))
                 out.writeInt(f.order)
+                out.writeBoolean(f.movie)
             }
             out.flush()
 
