@@ -1,6 +1,6 @@
 # ADMOSS Downloader testing checklist
 
-Run these checks before merging changes or publishing a release.
+Run these checks before merging changes or publishing a release. Automated checks do not replace testing on physical Android devices.
 
 ## Automated checks
 
@@ -17,20 +17,35 @@ For a local development build:
 gradle testDebugUnitTest lintDebug assembleDebug --no-daemon
 ```
 
-## Download and library regression
+## Faster downloads and library
 
+- [ ] Paste a YouTube link: title and cover show up first, sizes follow.
+- [ ] Paste the same link again: the info shows at once (cache).
+- [ ] Download a video right after the lookup: it starts without a long "Starting…" wait.
+- [ ] Add 3 links to the queue with "Downloads at the same time" = 2: two run together, one waits.
+- [ ] Set it to 1 in Settings: they run one after another.
 - [ ] Download a YouTube video in at least two qualities.
 - [ ] Download audio-only and verify the saved file opens.
-- [ ] Load a playlist, select a subset, and verify order and titles.
+- [ ] Download a TikTok photo post with 10+ photos: photos and music save quickly, all in order.
 - [ ] Download a TikTok video and a photo slideshow.
-- [ ] Queue multiple links, pause/cancel where supported, and retry a failed item.
-- [ ] Run the configured parallel-download limit and verify no item is duplicated.
+- [ ] Load a playlist, select a subset, and verify order and titles.
+- [ ] Load a playlist, tap "Calculate total size": it checks several videos at once and can be stopped.
+- [ ] Queue multiple links, cancel/retry where supported, and verify no item is duplicated.
 - [ ] Force a network interruption and verify the item ends in a recoverable state.
 - [ ] Verify downloads remain visible after closing and reopening the app.
-- [ ] Delete a downloaded item and verify both the file and library entry are handled correctly.
 - [ ] Simulate insufficient storage and confirm a useful error with no ghost MediaStore item.
 
-## Offline sharing (OMS) regression
+## Deleting files and restoring the library
+
+- [ ] Library > trash icon on one item > Delete: the file is gone from the gallery / file manager.
+- [ ] "Only remove from the list" keeps the file on the phone.
+- [ ] Long-press an item, select more, tap the trash icon at the top: confirmation, then all are deleted.
+- [ ] Playlist page > "Delete all files in this playlist".
+- [ ] After a reinstall + "find my saved files": delete a restored item. Android may show its own confirmation. Confirm it: the item must disappear and the file must be gone.
+- [ ] Say no in Android's confirmation: the item must stay in the Library.
+- [ ] Verify that incomplete MediaStore rows are removed after a failed copy/publish operation.
+
+## Offline sharing (OMS)
 
 Use two physical Android devices, preferably one Android 10–12 device and one recent Android version.
 
@@ -41,15 +56,20 @@ Use two physical Android devices, preferably one Android 10–12 device and one 
 - [ ] Cancel during transfer and verify both devices return to a usable state.
 - [ ] Turn off the receiving phone's Wi-Fi during transfer and verify a clear failure.
 - [ ] Fill or restrict receiver storage and verify incomplete MediaStore rows are removed.
-- [ ] Verify invalid MIME types, negative sizes, per-file over-limit sizes, and aggregate over-limit sizes are rejected by unit tests.
+- [ ] Verify invalid MIME types, negative sizes, per-file over-limit sizes, file-count limits, and aggregate over-limit sizes are rejected by unit tests.
 
-## Updater regression
+## Updates
 
-- [ ] Check for updates when there is no newer release.
-- [ ] Check a newer release and verify the correct ABI APK is selected.
+- [ ] Settings > "Check for updates now" with no new release: "You have the latest version".
+- [ ] Publish a newer release built by the workflow. The app shows "Update available" with the version, size and release notes.
+- [ ] "Update now": progress bar, "Checking the file…", then Android's installer asks to confirm.
+- [ ] After installing: the Library, settings and theme are still there.
+- [ ] Turn "Check for updates automatically" off: no card at launch and no notification.
+- [ ] Turn it on and leave the app: a notification appears within about 12 hours after a release.
+- [ ] Check that the release has the `.apk.sha256` files next to the APKs.
 - [ ] Verify a valid download's size and SHA-256.
 - [ ] Confirm invalid APKs, a different package ID, an older version, and a different signing certificate are rejected.
-- [ ] Confirm only HTTPS GitHub URLs and the known GitHub asset redirect hosts are accepted.
+- [ ] Confirm only HTTPS GitHub URLs and known GitHub asset redirect hosts are accepted.
 - [ ] Cancel Android's installer prompt and confirm the current app remains usable.
 - [ ] Install an update signed by the same permanent certificate and verify app data remains intact.
 

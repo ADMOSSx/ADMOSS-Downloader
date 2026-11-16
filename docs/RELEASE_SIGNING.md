@@ -48,7 +48,7 @@ The workflow checks the keystore certificate before building and checks every pr
 
 - Local debug builds use `gradle assembleDebug` and do not need release credentials.
 - Release packaging tasks fail when permanent signing credentials are missing.
-- Branch builds without signing secrets produce clearly named debug APK artifacts only.
+- Branch builds with no release secrets, or without the pinned fingerprint, produce clearly named debug APK artifacts only. Partially configured signing secrets fail so misconfiguration is not hidden.
 - Tagged releases require all four secrets and the pinned certificate variable.
 - The workflow never publishes debug-signed APKs as official releases.
 

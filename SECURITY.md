@@ -8,7 +8,7 @@ Security fixes are applied to the current default branch and the latest publishe
 
 Please do not publish exploit details, private signing material, access tokens, or personal data in a public issue.
 
-Open a GitHub issue with a short, non-sensitive description and request a private disclosure channel, or contact the repository maintainer through the contact information on the GitHub profile. Include affected app version, Android version, reproduction steps, and expected versus actual behavior.
+Use GitHub's private vulnerability reporting feature on the repository's Security tab if it is enabled, or contact the maintainer privately through the contact information on the GitHub profile. Do not post exploit details in a public issue. Include the affected app version, Android version, reproduction steps, and expected versus actual behavior only in the private report.
 
 ## Release signing
 
