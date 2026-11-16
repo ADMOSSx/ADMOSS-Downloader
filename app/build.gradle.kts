@@ -12,18 +12,16 @@ val keyAliasValue = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
 val keyPasswordValue = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
 val updateRepo: String = System.getenv("GITHUB_REPOSITORY") ?: ""
 
-val signingValues = listOf(keystorePath, keystorePassword, keyAliasValue, keyPasswordValue)
-val releaseSigningConfigured = signingValues.all { it != null } &&
-    keystorePath?.let { file(it).isFile } == true
+val releaseSigningConfigured = keystorePath != null &&
+    keystorePassword != null && keyAliasValue != null && keyPasswordValue != null &&
+    file(requireNotNull(keystorePath)).isFile
 
-if (signingValues.any { it != null } && !releaseSigningConfigured) {
-    val missing = buildList {
-        if (keystorePath == null || keystorePath.let { !file(it).isFile }) add("KEYSTORE_PATH (existing file)")
-        if (keystorePassword == null) add("KEYSTORE_PASSWORD")
-        if (keyAliasValue == null) add("KEY_ALIAS")
-        if (keyPasswordValue == null) add("KEY_PASSWORD")
-    }
-    throw GradleException("Incomplete release signing configuration. Missing or invalid: ${missing.joinToString()}")
+val missingSigningValues = buildList {
+    if (keystorePath == null) add("KEYSTORE_PATH")
+    else if (!file(keystorePath).isFile) add("KEYSTORE_PATH (existing file)")
+    if (keystorePassword == null) add("KEYSTORE_PASSWORD")
+    if (keyAliasValue == null) add("KEY_ALIAS")
+    if (keyPasswordValue == null) add("KEY_PASSWORD")
 }
 
 android {
@@ -103,7 +101,7 @@ gradle.taskGraph.whenReady {
     }
     if (releasePackagingRequested && !releaseSigningConfigured) {
         throw GradleException(
-            "Release signing is not configured. Set KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD. " +
+            "Release signing is not configured. Missing or invalid: ${missingSigningValues.joinToString()}. " +
                 "Use assembleDebug for local testing."
         )
     }
