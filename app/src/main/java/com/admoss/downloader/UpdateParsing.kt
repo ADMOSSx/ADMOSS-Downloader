@@ -3,6 +3,7 @@ package com.admoss.downloader
 /** Pure parsing helpers kept separate from Android update/network orchestration. */
 internal object UpdateParsing {
     /** "1.10.0" is newer than "1.9.5". */
+    /** "1.10.0" is newer than "1.9.5". */
     fun isNewer(remote: String, local: String): Boolean {
         fun parts(v: String): List<Int> = v.trim().removePrefix("v").removePrefix("V").split(".")
             .map { part -> part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0 }

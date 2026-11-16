@@ -357,7 +357,7 @@ object OmsCenter {
         }
         val peer = input.readUTF().take(60).ifBlank { "Another phone" }
         val count = input.readInt()
-        if (count < 1 || count > OmsProtocol.MAX_FILES) {
+        if (!OmsProtocol.isValidFileCount(count)) {
             output.writeByte(0)
             output.flush()
             return false
@@ -375,9 +375,7 @@ object OmsCenter {
             val movie = input.readBoolean()
             // Enforce both per-file and aggregate limits before accepting untrusted metadata.
             val nextTotal = OmsProtocol.addToTotal(total, size)
-            if (nextTotal == null || kind < 0 || kind > 2 || OmsProtocol.kindOfMime(mime) != kind ||
-                (movie && kind != OmsProtocol.KIND_VIDEO)
-            ) {
+            if (nextTotal == null || !OmsProtocol.isValidMediaType(kind, mime, movie)) {
                 output.writeByte(0)
                 output.flush()
                 return false
@@ -620,16 +618,14 @@ object OmsCenter {
         val link = OmsQr.parse(qr) ?: return false
         val files = selected
         if (files.isEmpty()) return false
-        if (files.size > OmsProtocol.MAX_FILES) {
-            message = "You can share up to ${OmsProtocol.MAX_FILES} files at once."
+        if (!OmsProtocol.isValidFileCount(files.size)) {
+            message = "Select between 1 and ${OmsProtocol.MAX_FILES} files to share."
             return false
         }
         var selectedTotal = 0L
         for (file in files) {
             val nextTotal = OmsProtocol.addToTotal(selectedTotal, file.size)
-            if (nextTotal == null || OmsProtocol.kindOfMime(file.mime) != file.kind ||
-                (file.movie && file.kind != OmsProtocol.KIND_VIDEO)
-            ) {
+            if (nextTotal == null || !OmsProtocol.isValidMediaType(file.kind, file.mime, file.movie)) {
                 message = "The selection contains an unsupported file or exceeds the sharing size limit."
                 return false
             }

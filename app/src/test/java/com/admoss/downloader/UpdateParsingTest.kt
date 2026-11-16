@@ -32,4 +32,23 @@ class UpdateParsingTest {
         assertEquals(901, result.length)
         assertTrue(result.endsWith("…"))
     }
+
+    @Test
+    fun acceptsOnlyTrustedHttpsGitHubUrls() {
+        assertTrue(UpdateParsing.isTrustedGitHubUrl("https://api.github.com/repos/owner/repo/releases/latest"))
+        assertTrue(UpdateParsing.isTrustedGitHubUrl("https://github.com/owner/repo/releases/download/v1/app.apk"))
+        assertFalse(UpdateParsing.isTrustedGitHubUrl("http://github.com/owner/repo"))
+        assertFalse(UpdateParsing.isTrustedGitHubUrl("https://github.com.evil.example/file.apk"))
+        assertFalse(UpdateParsing.isTrustedGitHubUrl("https://example.com/file.apk"))
+        assertFalse(UpdateParsing.isTrustedGitHubUrl("https://github.com:8443/file.apk"))
+        assertFalse(UpdateParsing.isTrustedGitHubUrl("https://user@github.com/file.apk"))
+    }
+
+    @Test
+    fun allowsOnlyKnownGitHubAssetRedirectHosts() {
+        assertTrue(UpdateParsing.isTrustedGitHubResponseUrl("https://release-assets.githubusercontent.com/file"))
+        assertTrue(UpdateParsing.isTrustedGitHubResponseUrl("https://objects.githubusercontent.com/file"))
+        assertFalse(UpdateParsing.isTrustedGitHubResponseUrl("https://attacker.example/file"))
+        assertFalse(UpdateParsing.isTrustedGitHubResponseUrl("http://release-assets.githubusercontent.com/file"))
+    }
 }

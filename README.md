@@ -132,39 +132,64 @@ Android 10 or newer. Use the `arm64-v8a` APK unless your phone is very old.
 
 ## 🛠️ Build it yourself
 
-### With GitHub Actions (no Android Studio needed)
+### With GitHub Actions
 
-1. Fork this repository.
-2. Open the **Actions** tab. **Build APK** runs on every push, and you can start it with **Run workflow**.
-3. Download the APKs from the **Artifacts** of the finished run.
+1. Fork or clone this repository.
+2. Open **Actions → Build APK**. The workflow runs on pushes, pull requests to `main`, and manual dispatch.
+3. Branch and fork builds without a verified release key produce clearly named **debug APKs** for testing.
+4. Download APKs from the **Artifacts** section of a successful run.
 
-### Permanent signing key
+### Permanent release signing key
 
-So that updates install over old versions, add these **repository secrets** (Settings > Secrets and variables > Actions):
+To publish updates that install over an existing version, use the same permanent keystore that signed the earlier official releases. Add these repository **Actions secrets** under **Settings → Secrets and variables → Actions → Secrets**:
 
 | Secret | What it is |
 |---|---|
-| `KEYSTORE_BASE64` | your keystore file encoded as base64 |
-| `KEYSTORE_PASSWORD` | the keystore password |
-| `KEY_ALIAS` | the key alias |
-| `KEY_PASSWORD` | the key password |
+| `KEYSTORE_BASE64` | Base64-encoded permanent keystore |
+| `KEYSTORE_PASSWORD` | Keystore password |
+| `KEY_ALIAS` | Private-key alias |
+| `KEY_PASSWORD` | Private-key password |
 
-Never commit the keystore file to the repository.
+Then add this repository **Actions variable** under **Settings → Secrets and variables → Actions → Variables**:
+
+| Variable | What it is |
+|---|---|
+| `EXPECTED_CERT_SHA256` | SHA-256 certificate fingerprint from an already-published official APK |
+
+The workflow compares the keystore and every release APK against this pinned fingerprint. A missing or mismatched fingerprint blocks tagged release publishing. See [Release signing setup](docs/RELEASE_SIGNING.md).
+
+Never commit the keystore, passwords, Base64 secret, or signing reports containing private information.
 
 ### Publish a release
+
+Only after the signing secrets and expected certificate fingerprint are configured:
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The workflow builds the APKs and attaches them to a new release. The in-app updater reads the latest release.
+The workflow checks that the tag matches `versionName`, runs tests and lint, verifies the APK signatures, then attaches the APKs and SHA-256 sidecars to the GitHub release.
+
+### Local build
+
+For normal development, use a debug build (no release keystore required):
+
+```bash
+gradle testDebugUnitTest lintDebug assembleDebug --no-daemon
+```
+
+A release build requires the permanent signing credentials. Do not use a newly generated key for an existing app installation.
 
 ### With Android Studio
 
-Open the project, wait for Gradle to sync, and press **Run**.
+Open the project, wait for Gradle sync, and press **Run**. This uses the debug build.
 
 ---
+
+## 🧪 Quality checks
+
+See [the testing checklist](docs/TESTING.md) for CI commands and the device-level regression tests required before publishing a release.
 
 ## 🧱 Tech stack
 

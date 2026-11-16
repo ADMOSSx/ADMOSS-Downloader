@@ -57,11 +57,18 @@ object OmsProtocol {
     /** Photos, videos and music only. Anything else gives -1 and is never sent or saved. */
     fun kindOfMime(mime: String?): Int = when {
         mime == null -> -1
-        mime.startsWith("image/") -> KIND_PHOTO
-        mime.startsWith("video/") -> KIND_VIDEO
-        mime.startsWith("audio/") -> KIND_MUSIC
+        mime.lowercase().startsWith("image/") -> KIND_PHOTO
+        mime.lowercase().startsWith("video/") -> KIND_VIDEO
+        mime.lowercase().startsWith("audio/") -> KIND_MUSIC
         else -> -1
     }
+
+    fun isValidFileCount(count: Int): Boolean = count in 1..MAX_FILES
+
+    fun isValidMediaType(kind: Int, mime: String?, movie: Boolean = false): Boolean =
+        kind in KIND_PHOTO..KIND_MUSIC &&
+            kindOfMime(mime) == kind &&
+            (!movie || kind == KIND_VIDEO)
 
     fun fallbackMime(kind: Int): String = when (kind) {
         KIND_PHOTO -> "image/jpeg"

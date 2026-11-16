@@ -62,22 +62,10 @@ object Updater {
 
     // ---------- finding the newest release ----------
 
-    private fun isTrustedGitHubUrl(raw: String): Boolean = try {
-        val url = URL(raw)
-        url.protocol.equals("https", ignoreCase = true) &&
-            url.host.lowercase() in setOf("api.github.com", "github.com")
-    } catch (e: Exception) {
-        false
-    }
+    private fun isTrustedGitHubUrl(raw: String): Boolean = UpdateParsing.isTrustedGitHubUrl(raw)
 
     private fun isTrustedGitHubResponse(connection: HttpURLConnection): Boolean =
-        connection.url.protocol.equals("https", ignoreCase = true) &&
-            connection.url.host.lowercase() in setOf(
-                "api.github.com",
-                "github.com",
-                "release-assets.githubusercontent.com",
-                "objects.githubusercontent.com"
-            )
+        UpdateParsing.isTrustedGitHubResponseUrl(connection.url.toString())
 
     private fun httpText(url: String): String {
         if (!isTrustedGitHubUrl(url)) throw SecurityException("Untrusted update metadata URL")
@@ -216,10 +204,12 @@ object Updater {
         stage = "Downloading update…"
 
         thread(name = "admoss-update-download") {
+            var partialFile: File? = null
             try {
                 val dir = File(ctx.cacheDir, "updates").apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
                 val file = File(dir, "ADMOSS-Downloader-update.apk")
+                partialFile = file
                 val sha = MessageDigest.getInstance("SHA-256")
 
                 val c = URL(info.apkUrl).openConnection() as HttpURLConnection
@@ -227,13 +217,23 @@ object Updater {
                 c.readTimeout = 30000
                 c.instanceFollowRedirects = true
                 c.setRequestProperty("User-Agent", "ADMOSS-Downloader")
-                val response = c.responseCode
-                if (response != HttpURLConnection.HTTP_OK || !isTrustedGitHubResponse(c)) {
-                    throw SecurityException("The update download did not come from a trusted GitHub host.")
-                }
-                val total = if (c.contentLengthLong > 0) c.contentLengthLong else info.size
-
                 try {
+                    val response = c.responseCode
+                    if (response != HttpURLConnection.HTTP_OK || !isTrustedGitHubResponse(c)) {
+                        throw SecurityException("The update download did not come from a trusted GitHub host.")
+                    }
+                    val responseBytes = c.contentLengthLong
+                    val total = if (responseBytes > 0) responseBytes else info.size
+                    val maxUpdateBytes = 512L * 1024L * 1024L
+                    if (total <= 0L || total > maxUpdateBytes ||
+                        (info.size > 0L && info.size > maxUpdateBytes)
+                    ) {
+                        throw IOException("The update has an invalid or excessive file size.")
+                    }
+                    if (responseBytes > 0L && info.size > 0L && responseBytes != info.size) {
+                        throw IOException("The update size does not match the release metadata.")
+                    }
+
                     c.inputStream.use { input ->
                         file.outputStream().use { out ->
                             val buf = ByteArray(64 * 1024)
@@ -242,9 +242,12 @@ object Updater {
                             while (true) {
                                 val read = input.read(buf)
                                 if (read < 0) break
+                                done += read
+                                if (done > maxUpdateBytes || done > total) {
+                                    throw IOException("The update download exceeded its declared size.")
+                                }
                                 out.write(buf, 0, read)
                                 sha.update(buf, 0, read)
-                                done += read
                                 if (total > 0) {
                                     val pct = (done * 100 / total).toInt()
                                     if (pct != last) {
@@ -279,6 +282,7 @@ object Updater {
                     install(ctx, file)
                 }
             } catch (e: Throwable) {
+                try { partialFile?.delete() } catch (_: Throwable) { }
                 ui {
                     downloading = false
                     message = "Update download failed. Try again."
