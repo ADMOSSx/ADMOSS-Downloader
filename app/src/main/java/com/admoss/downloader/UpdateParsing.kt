@@ -3,7 +3,33 @@ package com.admoss.downloader
 /** Pure parsing helpers kept separate from Android update/network orchestration. */
 internal object UpdateParsing {
     /** "1.10.0" is newer than "1.9.5". */
-    /** "1.10.0" is newer than "1.9.5". */
+    /** Only allow direct HTTPS URLs on GitHub's known public download/API hosts. */
+    fun isTrustedGitHubUrl(raw: String): Boolean = try {
+        val url = java.net.URL(raw)
+        url.protocol.equals("https", ignoreCase = true) &&
+            url.host.lowercase() in setOf("api.github.com", "github.com") &&
+            (url.port == -1 || url.port == 443) &&
+            url.userInfo == null
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Redirects for release assets may use GitHub's dedicated asset CDN hosts. */
+    fun isTrustedGitHubResponseUrl(raw: String): Boolean = try {
+        val url = java.net.URL(raw)
+        url.protocol.equals("https", ignoreCase = true) &&
+            url.host.lowercase() in setOf(
+                "api.github.com",
+                "github.com",
+                "release-assets.githubusercontent.com",
+                "objects.githubusercontent.com"
+            ) &&
+            (url.port == -1 || url.port == 443) &&
+            url.userInfo == null
+    } catch (e: Exception) {
+        false
+    }
+
     fun isNewer(remote: String, local: String): Boolean {
         fun parts(v: String): List<Int> = v.trim().removePrefix("v").removePrefix("V").split(".")
             .map { part -> part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0 }
