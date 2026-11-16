@@ -50,6 +50,8 @@ object OmsProtocol {
     const val KIND_VIDEO = 1
     const val KIND_MUSIC = 2
     const val MAX_FILES = 3000
+    const val MAX_FILE_BYTES = 8L * 1024L * 1024L * 1024L
+    const val MAX_TOTAL_BYTES = 20L * 1024L * 1024L * 1024L
     const val CHUNK = 256 * 1024
 
     /** Photos, videos and music only. Anything else gives -1 and is never sent or saved. */
@@ -65,6 +67,13 @@ object OmsProtocol {
         KIND_PHOTO -> "image/jpeg"
         KIND_VIDEO -> "video/mp4"
         else -> "audio/mpeg"
+    }
+
+    /** Returns the next total, or null when a size is invalid or the aggregate cap is exceeded. */
+    fun addToTotal(current: Long, next: Long): Long? {
+        if (current < 0L || current > MAX_TOTAL_BYTES || next < 0L || next > MAX_FILE_BYTES) return null
+        if (next > MAX_TOTAL_BYTES - current) return null
+        return current + next
     }
 
     /** A safe file name from another phone: no folders, no strange characters. */

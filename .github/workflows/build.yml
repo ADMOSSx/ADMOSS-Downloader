@@ -34,32 +34,144 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare signing key
+      - name: Prepare and verify signing key
+        id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: ${{ vars.EXPECTED_CERT_SHA256 }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-            echo "Using the permanent signing key"
-          else
-            echo "No signing key secret found, using a temporary debug key"
+          set -euo pipefail
+          missing=()
+          [ -n "$KEYSTORE_BASE64" ] || missing+=("KEYSTORE_BASE64")
+          [ -n "$KEYSTORE_PASSWORD" ] || missing+=("KEYSTORE_PASSWORD")
+          [ -n "$KEY_ALIAS" ] || missing+=("KEY_ALIAS")
+          [ -n "$KEY_PASSWORD" ] || missing+=("KEY_PASSWORD")
+
+          if [ "${#missing[@]}" -eq 4 ]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::Release tags require the permanent Android signing secrets."
+              exit 1
+            fi
+            echo "SIGNING_MODE=debug" >> "$GITHUB_ENV"
+            echo "No release signing secrets are configured; this branch run will build debug APKs only."
+            exit 0
           fi
 
-      - name: Build release APKs
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error::Incomplete signing configuration. Missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          if [ -z "$EXPECTED_CERT_SHA256" ]; then
+            echo "::error::Set the repository variable EXPECTED_CERT_SHA256 to the SHA-256 fingerprint of the existing release certificate."
+            exit 1
+          fi
+
+          expected=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          if ! [[ "$expected" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "::error::EXPECTED_CERT_SHA256 must contain exactly 64 hexadecimal characters."
+            exit 1
+          fi
+
+          key="$RUNNER_TEMP/admoss-release.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$key"
+          test -s "$key"
+
+          # keytool validates the store password, alias and private-key password.
+          details=$(keytool -list -v -keystore "$key" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" 2>&1) || {
+            echo "::error::The release keystore, store password, or alias is invalid."
+            exit 1
+          }
+          if printf '%s\n' "$details" | grep -qi 'CN=Android Debug'; then
+            echo "::error::An Android debug certificate cannot be used for a release."
+            exit 1
+          fi
+          actual=$(printf '%s\n' "$details" | awk -F': ' '/SHA256:/{print $2; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
+          unset details
+
+          # Importing the private-key entry verifies KEY_PASSWORD as well as the store password.
+          key_check="$RUNNER_TEMP/admoss-signing-check.p12"
+          keytool -importkeystore -noprompt \
+            -srckeystore "$key" -srcstorepass "$KEYSTORE_PASSWORD" -srcalias "$KEY_ALIAS" -srckeypass "$KEY_PASSWORD" \
+            -destkeystore "$key_check" -deststoretype PKCS12 -deststorepass "$KEYSTORE_PASSWORD" -destkeypass "$KEYSTORE_PASSWORD" \
+            >/dev/null 2>&1 || {
+              rm -f "$key_check"
+              echo "::error::The release private-key password or key entry is invalid."
+              exit 1
+            }
+          rm -f "$key_check"
+          if ! [[ "$actual" =~ ^[0-9A-F]{64}$ ]]; then
+            echo "::error::Could not read the release certificate SHA-256 fingerprint."
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::The release keystore does not match EXPECTED_CERT_SHA256. Refusing to build a publishable release."
+            exit 1
+          fi
+
+          echo "KEYSTORE_PATH=$key" >> "$GITHUB_ENV"
+          echo "SIGNING_MODE=release" >> "$GITHUB_ENV"
+          echo "Permanent release signing key verified."
+
+      - name: Build and test signed release
+        if: env.SIGNING_MODE == 'release'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --no-daemon
+        run: gradle testDebugUnitTest lintRelease assembleRelease --no-daemon
+
+      - name: Build debug APKs for unsigned branch/fork runs
+        if: env.SIGNING_MODE == 'debug'
+        run: gradle testDebugUnitTest lintDebug assembleDebug --no-daemon
+
+      - name: Verify release APK signatures
+        if: env.SIGNING_MODE == 'release'
+        env:
+          EXPECTED_CERT_SHA256: ${{ vars.EXPECTED_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          apksigner="$build_tools/apksigner"
+          test -x "$apksigner"
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          [ "${#apks[@]}" -gt 0 ] || { echo "::error::No release APKs were produced."; exit 1; }
+          for apk in "${apks[@]}"; do
+            details=$("$apksigner" verify --verbose --print-certs "$apk" 2>&1) || {
+              echo "::error::APK signature verification failed."
+              exit 1
+            }
+            actual=$(printf '%s\n' "$details" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}' | tr -d ':' | tr '[:lower:]' '[:upper:]')
+            unset details
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::APK certificate fingerprint does not match EXPECTED_CERT_SHA256."
+              exit 1
+            fi
+          done
+          echo "All release APKs have the expected signature."
 
       - name: Collect APKs
         run: |
-          mkdir out
-          for f in app/build/outputs/apk/release/*.apk; do
-            name=$(basename "$f" | sed -e 's/^app-//' -e 's/-release//')
-            cp "$f" "out/ADMOSS-Downloader-$name"
-            (cd out && sha256sum "ADMOSS-Downloader-$name" | cut -d' ' -f1 > "ADMOSS-Downloader-$name.sha256")
+          set -euo pipefail
+          mkdir -p out
+          shopt -s nullglob
+          if [ "$SIGNING_MODE" = "release" ]; then
+            apks=(app/build/outputs/apk/release/*.apk)
+            prefix="ADMOSS-Downloader-"
+          else
+            apks=(app/build/outputs/apk/debug/*.apk)
+            prefix="ADMOSS-Downloader-DEBUG-"
+          fi
+          [ "${#apks[@]}" -gt 0 ] || { echo "::error::No APKs were produced."; exit 1; }
+          for f in "${apks[@]}"; do
+            name=$(basename "$f" | sed -e 's/^app-//' -e 's/-release//' -e 's/-debug//')
+            cp "$f" "out/${prefix}$name"
+            (cd out && sha256sum "${prefix}$name" | cut -d' ' -f1 > "${prefix}$name.sha256")
           done
           ls -lh out
 
@@ -69,7 +181,7 @@ jobs:
           path: out/*
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && env.SIGNING_MODE == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: out/*

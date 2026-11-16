@@ -908,13 +908,21 @@ object DownloadCenter {
         }
         val uri = resolver.insert(MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
             ?: throw Exception("Could not create the picture file")
-        resolver.openOutputStream(uri)?.use { output ->
-            file.inputStream().use { it.copyTo(output) }
-        } ?: throw Exception("Could not write the picture")
-        values.clear()
-        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
-        return uri
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                file.inputStream().use { it.copyTo(output) }
+            } ?: throw Exception("Could not write the picture")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            if (resolver.update(uri, values, null, null) <= 0) {
+                throw Exception("Could not finish saving the picture")
+            }
+            return uri
+        } catch (t: Throwable) {
+            // Roll back the pending MediaStore row so failed photo downloads never leave ghost files.
+            try { resolver.delete(uri, null, null) } catch (_: Throwable) { }
+            throw t
+        }
     }
 
     /** Saves the pictures to Pictures/ADMOSS/<post> and the music to Music/ADMOSS. */
@@ -1078,14 +1086,22 @@ object DownloadCenter {
         }
 
         val uri = resolver.insert(collection, values) ?: throw Exception("Could not create the file")
-        resolver.openOutputStream(uri)?.use { output ->
-            file.inputStream().use { it.copyTo(output) }
-        } ?: throw Exception("Could not write the file")
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                file.inputStream().use { it.copyTo(output) }
+            } ?: throw Exception("Could not write the file")
 
-        values.clear()
-        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
-        return uri
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            if (resolver.update(uri, values, null, null) <= 0) {
+                throw Exception("Could not finish saving the file")
+            }
+            return uri
+        } catch (t: Throwable) {
+            // Roll back incomplete or unpublished MediaStore entries.
+            try { resolver.delete(uri, null, null) } catch (_: Throwable) { }
+            throw t
+        }
     }
 
     private fun loadHistory(ctx: Context): List<HistoryItem> = try {

@@ -4,9 +4,27 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Signing key comes from GitHub Secrets (see the workflow). Without it the build uses a temporary debug key.
-val keystorePath: String? = System.getenv("KEYSTORE_PATH")
+// Release builds must use the permanent signing key supplied by the build environment.
+// Debug builds remain independent from release credentials.
+val keystorePath = System.getenv("KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+val keystorePassword = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val keyAliasValue = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val keyPasswordValue = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
 val updateRepo: String = System.getenv("GITHUB_REPOSITORY") ?: ""
+
+val signingValues = listOf(keystorePath, keystorePassword, keyAliasValue, keyPasswordValue)
+val releaseSigningConfigured = signingValues.all { it != null } &&
+    keystorePath?.let { file(it).isFile } == true
+
+if (signingValues.any { it != null } && !releaseSigningConfigured) {
+    val missing = buildList {
+        if (keystorePath == null || keystorePath.let { !file(it).isFile }) add("KEYSTORE_PATH (existing file)")
+        if (keystorePassword == null) add("KEYSTORE_PASSWORD")
+        if (keyAliasValue == null) add("KEY_ALIAS")
+        if (keyPasswordValue == null) add("KEY_PASSWORD")
+    }
+    throw GradleException("Incomplete release signing configuration. Missing or invalid: ${missing.joinToString()}")
+}
 
 android {
     namespace = "com.admoss.downloader"
@@ -34,12 +52,12 @@ android {
     }
 
     signingConfigs {
-        if (keystorePath != null) {
+        if (releaseSigningConfigured) {
             create("release") {
-                storeFile = file(keystorePath.orEmpty())
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
+                storeFile = file(requireNotNull(keystorePath))
+                storePassword = requireNotNull(keystorePassword)
+                keyAlias = requireNotNull(keyAliasValue)
+                keyPassword = requireNotNull(keyPasswordValue)
             }
         }
     }
@@ -49,10 +67,8 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = if (keystorePath != null) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }
@@ -69,14 +85,27 @@ android {
     }
 
     lint {
-        checkReleaseBuilds = false
-        abortOnError = false
+        checkReleaseBuilds = true
+        abortOnError = true
     }
 
     // Needed so the bundled Python / ffmpeg binaries can run
     packaging {
         jniLibs { useLegacyPackaging = true }
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/DEPENDENCIES", "/META-INF/LICENSE*", "/META-INF/NOTICE*")
+    }
+}
+
+// Never allow a local or CI release packaging task to silently produce a debug-signed APK.
+gradle.taskGraph.whenReady {
+    val releasePackagingRequested = allTasks.any { task ->
+        task.name.matches(Regex("(assemble|bundle|package|install).*Release.*"))
+    }
+    if (releasePackagingRequested && !releaseSigningConfigured) {
+        throw GradleException(
+            "Release signing is not configured. Set KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD. " +
+                "Use assembleDebug for local testing."
+        )
     }
 }
 
@@ -96,4 +125,6 @@ dependencies {
     // yt-dlp + ffmpeg for Android (YouTube, TikTok and many more sites)
     implementation("io.github.junkfood02.youtubedl-android:library:0.17.2")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.2")
+
+    testImplementation("junit:junit:4.13.2")
 }

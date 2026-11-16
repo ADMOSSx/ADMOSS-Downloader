@@ -373,8 +373,9 @@ object OmsCenter {
             val season = input.readUTF().take(60).trim()
             val order = input.readInt()
             val movie = input.readBoolean()
-            // photos, videos and music only
-            if (size < 0 || kind < 0 || kind > 2 || OmsProtocol.kindOfMime(mime) != kind ||
+            // Enforce both per-file and aggregate limits before accepting untrusted metadata.
+            val nextTotal = OmsProtocol.addToTotal(total, size)
+            if (nextTotal == null || kind < 0 || kind > 2 || OmsProtocol.kindOfMime(mime) != kind ||
                 (movie && kind != OmsProtocol.KIND_VIDEO)
             ) {
                 output.writeByte(0)
@@ -390,7 +391,7 @@ object OmsCenter {
                     movie && series.isBlank()
                 )
             )
-            total += size
+            total = nextTotal
         }
 
         // Episodes that are already in this phone's Series tab are not sent again
@@ -597,7 +598,9 @@ object OmsCenter {
             }
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
+            if (resolver.update(uri, values, null, null) <= 0) {
+                throw IOException("Couldn't finish saving the received file")
+            }
             return uri
         } catch (t: Throwable) {
             // never leave a half file behind
@@ -617,10 +620,25 @@ object OmsCenter {
         val link = OmsQr.parse(qr) ?: return false
         val files = selected
         if (files.isEmpty()) return false
+        if (files.size > OmsProtocol.MAX_FILES) {
+            message = "You can share up to ${OmsProtocol.MAX_FILES} files at once."
+            return false
+        }
+        var selectedTotal = 0L
+        for (file in files) {
+            val nextTotal = OmsProtocol.addToTotal(selectedTotal, file.size)
+            if (nextTotal == null || OmsProtocol.kindOfMime(file.mime) != file.kind ||
+                (file.movie && file.kind != OmsProtocol.KIND_VIDEO)
+            ) {
+                message = "The selection contains an unsupported file or exceeds the sharing size limit."
+                return false
+            }
+            selectedTotal = nextTotal
+        }
         val app = ctx.applicationContext
         val e = begin(app, true)
         fileCount = files.size
-        totalBytes = files.sumOf { it.size }
+        totalBytes = selectedTotal
         peerName = link.name
         message = "Joining ${link.name}…"
         phase = OmsPhase.JOINING

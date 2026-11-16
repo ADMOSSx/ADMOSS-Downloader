@@ -62,14 +62,39 @@ object Updater {
 
     // ---------- finding the newest release ----------
 
+    private fun isTrustedGitHubUrl(raw: String): Boolean = try {
+        val url = URL(raw)
+        url.protocol.equals("https", ignoreCase = true) &&
+            url.host.lowercase() in setOf("api.github.com", "github.com")
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun isTrustedGitHubResponse(connection: HttpURLConnection): Boolean =
+        connection.url.protocol.equals("https", ignoreCase = true) &&
+            connection.url.host.lowercase() in setOf(
+                "api.github.com",
+                "github.com",
+                "release-assets.githubusercontent.com",
+                "objects.githubusercontent.com"
+            )
+
     private fun httpText(url: String): String {
+        if (!isTrustedGitHubUrl(url)) throw SecurityException("Untrusted update metadata URL")
         val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 10000
-        c.readTimeout = 10000
-        c.setRequestProperty("Accept", "application/vnd.github+json")
-        c.setRequestProperty("User-Agent", "ADMOSS-Downloader")
-        if (c.responseCode != 200) throw Exception("HTTP ${c.responseCode}")
-        return c.inputStream.bufferedReader().use { it.readText() }
+        try {
+            c.connectTimeout = 10000
+            c.readTimeout = 10000
+            c.instanceFollowRedirects = true
+            c.setRequestProperty("Accept", "application/vnd.github+json")
+            c.setRequestProperty("User-Agent", "ADMOSS-Downloader")
+            if (c.responseCode != 200 || !isTrustedGitHubResponse(c)) {
+                throw SecurityException("Untrusted or unsuccessful update metadata response")
+            }
+            return c.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            c.disconnect()
+        }
     }
 
     /** Blocking. Asks GitHub for the latest release. Throws if GitHub cannot be reached. */
@@ -155,51 +180,10 @@ object Updater {
     }
 
     /** "1.10.0" is newer than "1.9.5". */
-    fun isNewer(remote: String, local: String): Boolean {
-        fun parts(v: String): List<Int> = v.trim().removePrefix("v").removePrefix("V").split(".")
-            .map { part -> part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0 }
+    fun isNewer(remote: String, local: String): Boolean = UpdateParsing.isNewer(remote, local)
 
-        val r = parts(remote)
-        val l = parts(local)
-        for (i in 0 until maxOf(r.size, l.size)) {
-            val a = r.getOrElse(i) { 0 }
-            val b = l.getOrElse(i) { 0 }
-            if (a != b) return a > b
-        }
-        return false
-    }
-
-    /** Turns the GitHub release text (markdown, badges, tables) into short plain text. */
-    fun cleanNotes(body: String): String {
-        val lines = ArrayList<String>()
-        val separator = Regex("^\\|?[\\s:|-]+\\|?$")
-        val source = body.replace("\r", "").lines()
-        for ((idx, raw) in source.withIndex()) {
-            var l = raw.trim()
-            if (l.isEmpty()) {
-                if (lines.isNotEmpty() && lines.last().isNotEmpty()) lines.add("")
-                continue
-            }
-            if (l.startsWith("![") || l.contains("img.shields.io") || l.startsWith("---") || l.startsWith("```")) continue
-            if (separator.matches(l)) continue // table separator row
-            // the header row of a table (the line right before the separator row) is only labels
-            if (l.startsWith("|") && idx + 1 < source.size && separator.matches(source[idx + 1].trim())) continue
-            l = l.replace(Regex("<[^>]+>"), "")
-            l = l.replace(Regex("!?\\[([^\\]]*)\\]\\([^)]*\\)"), "$1")
-            l = l.replace(Regex("^#{1,6}\\s*"), "").replace("**", "").replace("`", "")
-            if (l.startsWith("|")) {
-                val cells = l.trim('|').split("|").map { it.trim() }.filter { it.isNotEmpty() }
-                l = "• " + cells.joinToString("  ")
-            } else if (l.startsWith("- ") || l.startsWith("* ")) {
-                l = "• " + l.drop(2)
-            }
-            l = l.trim()
-            if (l.isEmpty() || l == "•") continue
-            lines.add(l)
-        }
-        val text = lines.joinToString("\n").trim()
-        return if (text.length > 900) text.take(900).trimEnd() + "…" else text
-    }
+    /** Turns GitHub release markdown into short plain text. */
+    fun cleanNotes(body: String): String = UpdateParsing.cleanNotes(body)
 
     // ---------- download, check, install ----------
 
@@ -221,6 +205,11 @@ object Updater {
             return
         }
 
+        if (!isTrustedGitHubUrl(info.apkUrl)) {
+            message = "The update URL is not a trusted GitHub release URL."
+            return
+        }
+
         message = null
         downloading = true
         progress = 0f
@@ -238,28 +227,36 @@ object Updater {
                 c.readTimeout = 30000
                 c.instanceFollowRedirects = true
                 c.setRequestProperty("User-Agent", "ADMOSS-Downloader")
+                val response = c.responseCode
+                if (response != HttpURLConnection.HTTP_OK || !isTrustedGitHubResponse(c)) {
+                    throw SecurityException("The update download did not come from a trusted GitHub host.")
+                }
                 val total = if (c.contentLengthLong > 0) c.contentLengthLong else info.size
 
-                c.inputStream.use { input ->
-                    file.outputStream().use { out ->
-                        val buf = ByteArray(64 * 1024)
-                        var done = 0L
-                        var last = -1
-                        while (true) {
-                            val read = input.read(buf)
-                            if (read < 0) break
-                            out.write(buf, 0, read)
-                            sha.update(buf, 0, read)
-                            done += read
-                            if (total > 0) {
-                                val pct = (done * 100 / total).toInt()
-                                if (pct != last) {
-                                    last = pct
-                                    ui { progress = pct / 100f }
+                try {
+                    c.inputStream.use { input ->
+                        file.outputStream().use { out ->
+                            val buf = ByteArray(64 * 1024)
+                            var done = 0L
+                            var last = -1
+                            while (true) {
+                                val read = input.read(buf)
+                                if (read < 0) break
+                                out.write(buf, 0, read)
+                                sha.update(buf, 0, read)
+                                done += read
+                                if (total > 0) {
+                                    val pct = (done * 100 / total).toInt()
+                                    if (pct != last) {
+                                        last = pct
+                                        ui { progress = pct / 100f }
+                                    }
                                 }
                             }
                         }
                     }
+                } finally {
+                    c.disconnect()
                 }
 
                 ui {
